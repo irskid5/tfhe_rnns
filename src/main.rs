@@ -3,18 +3,18 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
+use bincode::{deserialize_from, serialize_into};
 use concrete_core::prelude::*;
 
 use std::error::Error;
+use std::fs;
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
 use std::mem::*;
 use std::time::Instant;
 
-use bincode::{deserialize_from, serialize_into};
-use std::fs::File;
-use std::io::{BufReader, BufWriter};
-
 #[derive(Debug)]
-struct Parameters {
+pub struct Parameters {
     n: LweDimension,
     lwe_var: Variance,
     N: PolynomialSize,
@@ -27,7 +27,7 @@ struct Parameters {
 }
 
 #[derive(Debug)]
-struct Keys {
+pub struct Keys {
     lwe: LweSecretKey64,
     glwe: GlweSecretKey64,
     extracted: LweSecretKey64,
@@ -63,19 +63,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Constructed Engines.");
 
     // let h_keys: Keys = create_keys(&config, &mut default_engine, &mut parallel_engine);
-    // save_keys("./keys/keys.bin", &h_keys, &mut serial_engine);
+    // save_keys("./keys/keys.bin", "./keys", &h_keys, &mut serial_engine);
     let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine);
     print_key_info(&h_keys);
 
     // Establish precision
-    let log_q = 64;
-    let log_p = 8;
-    let round_off = 1u64 << (log_q - log_p - 1);
+    let log_q: i32 = 64;
+    let log_p: i32 = 5;
+    let round_off: u64 = 1u64 << (log_q - log_p - 1);
 
-    // Encrypt vector of values
-    let num_cts = 10;
+    // Encrypt vector of values for whole distribution
+    let num_cts = 1 << log_p;
+    let half_range = 1 << (log_p - 1);
 
-    let inputs = vec![10u64 << (log_q - log_p); num_cts];
+    let inputs_raw: Vec<i64> = (-half_range..half_range).collect(); // The whole domain
+    let inputs: Vec<u64> = inputs_raw
+        .iter()
+        .map(|x| (*x as u64) << (log_q - log_p))
+        .collect();
+    // let inputs = vec![((-20i8 as u8) as u64) << (log_q - log_p); num_cts];
     let h_inp_pts = default_engine.create_plaintext_vector(&inputs).unwrap();
     let h_inp_cts = default_engine
         .encrypt_lwe_ciphertext_vector(&h_keys.lwe, &h_inp_pts, config.lwe_var)
@@ -90,7 +96,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Create LUTs
     // let lut = vec![1u64 << (log_q - log_p); N.0];
-    let luts = vec![1u64 << (log_q - log_p); num_cts * &config.N.0]; // you create a num_ct*glwe_size vector for multiple glwe cts in a vector
+    let luts = vec![1u64 << (log_q - log_p); num_cts * config.N.0]; // you create a num_ct*glwe_size vector for multiple glwe cts in a vector
     let h_lut_pts = default_engine.create_plaintext_vector(&luts).unwrap();
     let h_luts = default_engine
         .trivially_encrypt_glwe_ciphertext_vector(
@@ -169,7 +175,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|x| (x + round_off) >> (log_q - log_p))
         .collect();
 
-    println!("Result = [{:?}]", &h_result[0]);
+    println!("Result = [{:?}]", &h_result[0..]);
 
     // Cleanup
     default_engine.destroy(h_inp_pts).unwrap();
@@ -230,8 +236,15 @@ fn create_keys(
     }
 }
 
-fn save_keys(filename: &str, keys: &Keys, serial_engine: &mut DefaultSerializationEngine) {
+fn save_keys(
+    filename: &str,
+    filepath: &str,
+    keys: &Keys,
+    serial_engine: &mut DefaultSerializationEngine,
+) {
     println!("Saving keys...");
+
+    fs::create_dir_all(filepath).unwrap();
 
     // Serialize the keys
     let lwe_s = serial_engine.serialize(&keys.lwe).unwrap();
