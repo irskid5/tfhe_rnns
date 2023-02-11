@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Establish precision
     let log_q: i32 = 64;
-    let log_p: i32 = 5;
+    let log_p: i32 = 7;
     let round_off: u64 = 1u64 << (log_q - log_p - 1);
 
     // Encrypt vector of values for whole distribution
@@ -82,7 +82,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|x| (*x as u64) << (log_q - log_p))
         .collect();
     // let inputs = vec![((-20i8 as u8) as u64) << (log_q - log_p); num_cts];
-    let h_inp_pts = default_engine.create_plaintext_vector(&inputs).unwrap();
+    let h_inp_pts = default_engine
+        .create_plaintext_vector_from(&inputs)
+        .unwrap();
     let h_inp_cts = default_engine
         .encrypt_lwe_ciphertext_vector(&h_keys.lwe, &h_inp_pts, config.lwe_var)
         .unwrap();
@@ -97,7 +99,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Create LUTs
     // let lut = vec![1u64 << (log_q - log_p); N.0];
     let luts = vec![1u64 << (log_q - log_p); num_cts * config.N.0]; // you create a num_ct*glwe_size vector for multiple glwe cts in a vector
-    let h_lut_pts = default_engine.create_plaintext_vector(&luts).unwrap();
+    let h_lut_pts = default_engine.create_plaintext_vector_from(&luts).unwrap();
     let h_luts = default_engine
         .trivially_encrypt_glwe_ciphertext_vector(
             config.k.to_glwe_size(),
@@ -177,18 +179,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Result = [{:?}]", &h_result[0..]);
 
-    // Cleanup
-    default_engine.destroy(h_inp_pts).unwrap();
-    default_engine.destroy(h_inp_cts).unwrap();
-    default_engine.destroy(h_lut_pts).unwrap();
-    default_engine.destroy(h_luts).unwrap();
-    default_engine.destroy(h_out_cts).unwrap();
-    cuda_engine.destroy(d_inp_cts).unwrap();
-    cuda_engine.destroy(d_luts).unwrap();
-    cuda_engine.destroy(d_fourier_bsk).unwrap();
-    cuda_engine.destroy(d_out_cts).unwrap();
-    destroy_keys(h_keys, &mut default_engine);
-
     Ok(())
 }
 
@@ -199,12 +189,14 @@ fn create_keys(
 ) -> Keys {
     // Create the keys
     println!("Creating keys...");
-    let lwe: LweSecretKey64 = default_engine.create_lwe_secret_key(config.n).unwrap();
+    let lwe: LweSecretKey64 = default_engine
+        .generate_new_lwe_secret_key(config.n)
+        .unwrap();
     let glwe: GlweSecretKey64 = default_engine
-        .create_glwe_secret_key(config.k, config.N)
+        .generate_new_glwe_secret_key(config.k, config.N)
         .unwrap();
     let bsk: LweBootstrapKey64 = parallel_engine
-        .create_lwe_bootstrap_key(
+        .generate_new_lwe_bootstrap_key(
             &lwe,
             &glwe,
             config.Bg_bit_pbs,
@@ -216,7 +208,7 @@ fn create_keys(
         .transform_glwe_secret_key_to_lwe_secret_key(glwe.clone())
         .unwrap();
     let ksk_extracted_lwe: LweKeyswitchKey64 = default_engine
-        .create_lwe_keyswitch_key(
+        .generate_new_lwe_keyswitch_key(
             &extracted,
             &lwe,
             config.l_ks,
@@ -293,16 +285,6 @@ fn load_keys(filename: &str, serial_engine: &mut DefaultSerializationEngine) -> 
         ksk_extracted_lwe,
         bsk,
     }
-}
-
-fn destroy_keys(keys: Keys, default_engine: &mut DefaultEngine) {
-    println!("Destroying keys...");
-    default_engine.destroy(keys.lwe).unwrap();
-    default_engine.destroy(keys.glwe).unwrap();
-    default_engine.destroy(keys.extracted).unwrap();
-    default_engine.destroy(keys.ksk_extracted_lwe).unwrap();
-    default_engine.destroy(keys.bsk).unwrap();
-    println!("Keys destroyed.");
 }
 
 fn print_key_info(keys: &Keys) {

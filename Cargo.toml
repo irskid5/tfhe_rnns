@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 # concrete = { version = "0.2.0-beta", features = [ "booleans", "shortints", "integers", "serde"] }
-concrete-core = {version = "=1.0.0-gamma", features=["backend_default", "backend_cuda", "backend_default_parallel", "backend_default_serialization"]}
+concrete-core = {version = "=1.0.2", features=["backend_default", "backend_cuda", "backend_default_parallel", "backend_default_serialization"]}
 bincode = "1.3.3"
 
 # [profile.release]
