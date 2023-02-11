@@ -3,6 +3,7 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 
+use colored::Colorize;
 use std::error::Error;
 
 pub mod test_fns;
@@ -10,10 +11,30 @@ pub mod utils;
 
 use test_fns::*;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    amortized_cuda_bs_test(true, 1, 1)?;
+fn run_tests() -> Result<(), Box<dyn Error>> {
+    println!("");
+    println!("{}", "Beginning tests.".bold());
+
+    // Tests
+    for i in 0..12 {
+        print_test_banner!(amortized_cuda_bs_test, false, 2_i32.pow(i) as usize, 50);
+    }
 
     Ok(())
+}
+
+fn main() {
+    match run_tests() {
+        Ok(()) => println!("{}\n", "Tests completed.".bold()),
+        Err(e) => {
+            println!("");
+            println!("{}", "ERROR!".red().bold());
+            println!("{:?}", e);
+            println!("{}", e);
+            println!("");
+        }
+    };
+    println!("End.");
 }
 
 // NOTE: CODE FOR ENCODING THE WHOLE PRECISION RANGE (ex. -32 -> 31 for log_p=6)

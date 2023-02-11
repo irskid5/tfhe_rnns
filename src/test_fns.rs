@@ -12,16 +12,38 @@ use std::error::Error;
 use crate::utils::keys::*;
 use crate::utils::luts::*;
 
+#[macro_export]
+macro_rules! print_test_banner {
+    ($func_name:ident, $($args:expr),*) => {
+        println!("\n--------------------------------------------------");
+        println!("Beginning {}", stringify!($func_name).to_uppercase());
+        println!("--------------------------------------------------\n");
+        $func_name($($args),*)?;
+        println!("\n--------------------------------------------------");
+        println!("Ending {}", stringify!($func_name).to_uppercase());
+        println!("--------------------------------------------------\n");
+    };
+}
+
 pub fn amortized_cuda_bs_test(
     decrypt: bool,
     num_cts: usize,
     num_measurements: usize,
 ) -> Result<(), Box<dyn Error>> {
-    println!("\n--------------------------------------------------");
-    println!("-Beginning AMORTIZED_CUDA_BS_TEST-----------------");
-    println!("--------------------------------------------------\n");
-
     // Params from
+    // let config = Parameters {
+    //     n: LweDimension(774),
+    //     lwe_var: Variance(StandardDev(0.000002886954936071319246944).get_variance()),
+    //     N: PolynomialSize(2048),
+    //     k: GlweDimension(1),
+    //     rlwe_var: Variance(
+    //         StandardDev(0.00000000000000022148688116005568513645324585951).get_variance(),
+    //     ),
+    //     l_pbs: DecompositionLevelCount(1),
+    //     Bg_bit_pbs: DecompositionBaseLog(16),
+    //     l_ks: DecompositionLevelCount(5),
+    //     base_bit_ks: DecompositionBaseLog(4),
+    // };
     let config = Parameters {
         n: LweDimension(774),
         lwe_var: Variance(StandardDev(0.000002886954936071319246944).get_variance()),
@@ -95,8 +117,8 @@ pub fn amortized_cuda_bs_test(
     }
     let avg_ns: f32 = measurements.iter().sum::<f32>() / measurements.len() as f32;
     let avg_ms: f32 = avg_ns * 1e-6;
-    measurements = measurements.iter().map(|x| x * 1e-6).collect();
-    println!("Measurement list: {:?}", measurements);
+    // measurements = measurements.iter().map(|x| x * 1e-6).collect();
+    // println!("Measurement list: {:?}", measurements);
 
     println!(
         "Avg duration of {} bootstraps (precision of {}-bits, {} number of measurements) = {:.4}ms",
@@ -118,10 +140,6 @@ pub fn amortized_cuda_bs_test(
 
         println!("Result = {:?}", &h_result[0..]);
     }
-
-    println!("\n--------------------------------------------------");
-    println!("-Ending AMORTIZED_CUDA_BS_TEST--------------------");
-    println!("--------------------------------------------------\n");
 
     Ok(())
 }
