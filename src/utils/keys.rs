@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_mut)]
+#![allow(unused_imports)]
 
 use bincode::{deserialize_from, serialize_into};
 use concrete_core::prelude::*;
@@ -11,6 +12,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::mem::*;
+use lazy_static::lazy_static;
 
 #[derive(Debug)]
 pub struct Parameters {
@@ -23,6 +25,147 @@ pub struct Parameters {
     pub Bg_bit_pbs: DecompositionBaseLog,
     pub l_ks: DecompositionLevelCount,
     pub base_bit_ks: DecompositionBaseLog,
+}
+
+#[derive(Debug)]
+pub struct Keys {
+    pub lwe: LweSecretKey64,
+    pub glwe: GlweSecretKey64,
+    pub extracted: LweSecretKey64,
+    pub ksk_extracted_lwe: LweKeyswitchKey64,
+    pub bsk: LweBootstrapKey64,
+}
+
+pub struct CudaKeys {
+    pub ksk_extracted_lwe: CudaLweKeyswitchKey64,
+    pub bsk: CudaFourierLweBootstrapKey64,
+}
+
+// Statically define pararmeter sets
+lazy_static! {
+    // UNSAFE PARAMETERS (λ might not be >= 128)
+    pub static ref SET1: Parameters = Parameters {
+        n: LweDimension(774),
+        lwe_var: Variance(StandardDev(0.000002886954936071319246944).get_variance()),
+        N: PolynomialSize(2048),
+        k: GlweDimension(1),
+        rlwe_var: Variance(
+            StandardDev(0.00000000000000022148688116005568513645324585951).get_variance(),
+        ),
+        l_pbs: DecompositionLevelCount(1),
+        Bg_bit_pbs: DecompositionBaseLog(16),
+        l_ks: DecompositionLevelCount(5),
+        base_bit_ks: DecompositionBaseLog(4),
+    }; // POTENTIALLY UNSAFE, USE FOR TESTING (λ might be less than 128)
+
+    // SAFE PARAMETERS (λ >= 128)
+    pub static ref SET2: Parameters = Parameters {
+        n: LweDimension(806),
+        lwe_var: Variance(2.58668485306755e-12),
+        N: PolynomialSize(4096),
+        k: GlweDimension(1),
+        rlwe_var: Variance(4.701977e-38),
+        l_pbs: DecompositionLevelCount(15),
+        Bg_bit_pbs: DecompositionBaseLog(2),
+        l_ks: DecompositionLevelCount(3),
+        base_bit_ks: DecompositionBaseLog(5),
+    };
+
+    pub static ref SET3: Parameters = Parameters {
+        n: LweDimension(775),
+        lwe_var: Variance(8.035274993266690e-12),
+        N: PolynomialSize(4096),
+        k: GlweDimension(1),
+        rlwe_var: Variance(4.701977e-38),
+        l_pbs: DecompositionLevelCount(9),
+        Bg_bit_pbs: DecompositionBaseLog(4),
+        l_ks: DecompositionLevelCount(2),
+        base_bit_ks: DecompositionBaseLog(8),
+    };
+
+    pub static ref SET4: Parameters = Parameters {
+        n: LweDimension(796),
+        lwe_var: Variance(3.728517389899870e-12),
+        N: PolynomialSize(4096),
+        k: GlweDimension(1),
+        rlwe_var: Variance(4.701977e-38),
+        l_pbs: DecompositionLevelCount(3),
+        Bg_bit_pbs: DecompositionBaseLog(14),
+        l_ks: DecompositionLevelCount(2),
+        base_bit_ks: DecompositionBaseLog(8),
+    };
+
+    pub static ref SET5: Parameters = Parameters {
+        n: LweDimension(736),
+        lwe_var: Variance(3.344198833748040e-11),
+        N: PolynomialSize(2048),
+        k: GlweDimension(1),
+        rlwe_var: Variance(4.905643852600860e-32),
+        l_pbs: DecompositionLevelCount(15),
+        Bg_bit_pbs: DecompositionBaseLog(2),
+        l_ks: DecompositionLevelCount(3),
+        base_bit_ks: DecompositionBaseLog(5),
+    };
+
+    pub static ref SET6: Parameters = Parameters {
+        n: LweDimension(738),
+        lwe_var: Variance(3.108376095913400e-11),
+        N: PolynomialSize(2048),
+        k: GlweDimension(1),
+        rlwe_var: Variance(4.905643852600860e-32),
+        l_pbs: DecompositionLevelCount(12),
+        Bg_bit_pbs: DecompositionBaseLog(3),
+        l_ks: DecompositionLevelCount(3),
+        base_bit_ks: DecompositionBaseLog(5),
+    };
+
+    pub static ref SET7: Parameters = Parameters {
+        n: LweDimension(716),
+        lwe_var: Variance(6.948281374337440e-11),
+        N: PolynomialSize(2048),
+        k: GlweDimension(1),
+        rlwe_var: Variance(4.905643852600860e-32),
+        l_pbs: DecompositionLevelCount(8),
+        Bg_bit_pbs: DecompositionBaseLog(5),
+        l_ks: DecompositionLevelCount(2),
+        base_bit_ks: DecompositionBaseLog(7),
+    };
+
+    pub static ref SET8: Parameters = Parameters {
+        n: LweDimension(732),
+        lwe_var: Variance(3.870875046122880e-11),
+        N: PolynomialSize(2048),
+        k: GlweDimension(1),
+        rlwe_var: Variance(4.905643852600860e-32),
+        l_pbs: DecompositionLevelCount(3),
+        Bg_bit_pbs: DecompositionBaseLog(14),
+        l_ks: DecompositionLevelCount(2),
+        base_bit_ks: DecompositionBaseLog(8),
+    };
+
+    pub static ref SET9: Parameters = Parameters {
+        n: LweDimension(585),
+        lwe_var: Variance(8.357206851101390e-09),
+        N: PolynomialSize(1024),
+        k: GlweDimension(1),
+        rlwe_var: Variance(8.934364862023360e-16),
+        l_pbs: DecompositionLevelCount(2),
+        Bg_bit_pbs: DecompositionBaseLog(8),
+        l_ks: DecompositionLevelCount(2),
+        base_bit_ks: DecompositionBaseLog(8),
+    };
+
+    pub static ref SET10: Parameters = Parameters {
+        n: LweDimension(585),
+        lwe_var: Variance(8.357206851101390e-09),
+        N: PolynomialSize(1024),
+        k: GlweDimension(1),
+        rlwe_var: Variance(8.934364862023360e-16),
+        l_pbs: DecompositionLevelCount(6),
+        Bg_bit_pbs: DecompositionBaseLog(5),
+        l_ks: DecompositionLevelCount(2),
+        base_bit_ks: DecompositionBaseLog(8),
+    };
 }
 
 pub fn create_keys(
@@ -60,15 +203,6 @@ pub fn create_keys(
         ksk_extracted_lwe,
         bsk,
     })
-}
-
-#[derive(Debug)]
-pub struct Keys {
-    pub lwe: LweSecretKey64,
-    pub glwe: GlweSecretKey64,
-    pub extracted: LweSecretKey64,
-    pub ksk_extracted_lwe: LweKeyswitchKey64,
-    pub bsk: LweBootstrapKey64,
 }
 
 pub fn save_keys(
@@ -131,6 +265,16 @@ pub fn load_keys(
         extracted,
         ksk_extracted_lwe,
         bsk,
+    })
+}
+
+pub fn get_cuda_keys(h_keys: &Keys, cuda_engine: &mut CudaEngine) -> Result<CudaKeys, Box<dyn Error>> 
+{
+    let ksk = cuda_engine.convert_lwe_keyswitch_key(&h_keys.ksk_extracted_lwe)?;
+    let bsk = cuda_engine.convert_lwe_bootstrap_key(&h_keys.bsk)?;
+    Ok(CudaKeys {
+        ksk_extracted_lwe: ksk,
+        bsk
     })
 }
 

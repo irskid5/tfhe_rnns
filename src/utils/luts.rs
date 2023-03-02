@@ -2,10 +2,13 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_mut)]
+#![allow(unused_imports)]
 
 use concrete_core::prelude::*;
 
 use crate::utils::keys::Parameters;
+
+use std::error::Error;
 
 pub fn sign_lut(
     log_p: i32,
@@ -13,15 +16,16 @@ pub fn sign_lut(
     num_cts: usize,
     config: &Parameters,
     default_engine: &mut DefaultEngine,
-) -> GlweCiphertextVector64 {
+) -> Result<GlweCiphertextVector64, Box<dyn Error>> 
+{
     let luts = vec![1u64 << (log_q - log_p); num_cts * config.N.0]; // you create a num_ct*glwe_size vector for multiple glwe cts in a vector
-    let lut_pts = default_engine.create_plaintext_vector_from(&luts).unwrap();
+    let lut_pts = default_engine.create_plaintext_vector_from(&luts)?;
 
-    default_engine
+    let result = default_engine
         .trivially_encrypt_glwe_ciphertext_vector(
             config.k.to_glwe_size(),
             GlweCiphertextCount(num_cts),
             &lut_pts,
-        )
-        .unwrap()
+        )?;
+    Ok(result)
 }
