@@ -161,7 +161,7 @@ lazy_static! {
         N: PolynomialSize(1024),
         k: GlweDimension(1),
         rlwe_var: Variance(8.934364862023360e-16),
-        l_pbs: DecompositionLevelCount(6),
+        l_pbs: DecompositionLevelCount(5),
         Bg_bit_pbs: DecompositionBaseLog(5),
         l_ks: DecompositionLevelCount(2),
         base_bit_ks: DecompositionBaseLog(8),
@@ -177,13 +177,6 @@ pub fn create_keys(
     println!("Creating keys...");
     let lwe: LweSecretKey64 = default_engine.generate_new_lwe_secret_key(config.n)?;
     let glwe: GlweSecretKey64 = default_engine.generate_new_glwe_secret_key(config.k, config.N)?;
-    let bsk: LweBootstrapKey64 = parallel_engine.generate_new_lwe_bootstrap_key(
-        &lwe,
-        &glwe,
-        config.Bg_bit_pbs,
-        config.l_pbs,
-        config.rlwe_var,
-    )?;
     let extracted: LweSecretKey64 =
         default_engine.transform_glwe_secret_key_to_lwe_secret_key(glwe.clone())?;
     let ksk_extracted_lwe: LweKeyswitchKey64 = default_engine.generate_new_lwe_keyswitch_key(
@@ -191,6 +184,13 @@ pub fn create_keys(
         &lwe,
         config.l_ks,
         config.base_bit_ks,
+        config.rlwe_var,
+    )?;
+    let bsk: LweBootstrapKey64 = parallel_engine.generate_new_lwe_bootstrap_key(
+        &lwe,
+        &glwe,
+        config.Bg_bit_pbs,
+        config.l_pbs,
         config.rlwe_var,
     )?;
     println!("Keys created.");

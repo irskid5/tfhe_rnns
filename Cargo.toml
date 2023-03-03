@@ -19,6 +19,8 @@ ndarray = {version="0.15.6", features = ["std", "serde", "rayon"]}
 npyz = {version = "0.7.3", features = ["derive", "npz"]}
 num = "0.4.0"
 hdf5 = "0.8.1"
+time-graph = {version="0.3.0", features = ["json", "table"]}
+ndarray-stats = "0.5.1"
 
 # [profile.release]
 # debug = true

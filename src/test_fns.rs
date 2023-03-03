@@ -5,6 +5,7 @@
 #![allow(unused_imports)]
 
 use concrete_core::commons::math::decomposition::SignedDecomposer;
+use concrete_core::commons::utils::ZipChecked;
 use concrete_core::prelude::*;
 use hdf5::H5Type;
 use hdf5::{File, Dataset};
@@ -150,7 +151,17 @@ pub fn amortized_cuda_bs_test(
     let round_off: u64 = 1u64 << (log_q - log_p - 1);
 
     // Encrypt inputs/outputs
-    let inputs: Vec<u64> = vec![1u64 << (log_q - log_p); num_cts];
+    // let inputs: Vec<u64> = vec![1u64 << (log_q - log_p); num_cts];
+    let num_cts: usize = 1 << log_p - 1;
+    let half_range = 1 << (log_p - 1 - 1);
+
+    let inputs_raw: Vec<i64> = (-half_range..half_range).collect(); // The whole domain
+    let inputs: Vec<u64> = inputs_raw
+        .iter()
+        .map(|x| (*x as u64) << (log_q - log_p))
+        .collect();
+    println!("inputs: {:?}", inputs_raw);
+
     let h_inp_pts = default_engine.create_plaintext_vector_from(&inputs)?;
     let h_inp_cts =
         default_engine.encrypt_lwe_ciphertext_vector(&h_keys.lwe, &h_inp_pts, config.lwe_var)?;
@@ -210,11 +221,26 @@ pub fn amortized_cuda_bs_test(
             .iter()
             .map(|x| (x + round_off) >> (log_q - log_p))
             .collect();
+        println!("Result raw: {:?}", &h_result[0..]);
 
-        let correctness_vec: Vec<u64> = h_result.iter().map(|x| if *x != 1 {0} else {1}).collect();
-        let correctness = correctness_vec.iter().sum::<u64>() as f64 / correctness_vec.len() as f64 * 100 as f64; 
+        // This is for when we want to just use [1,1,1,1,1,...] as the input and measure bs correctness
+        // let correctness_vec: Vec<u64> = h_result.iter().map(|x| if *x != 1 {0} else {1}).collect();
+        // let correctness = correctness_vec.iter().sum::<u64>() as f64 / correctness_vec.len() as f64 * 100 as f64; 
 
-        // println!("Result = {:?}", &h_result[0..]);
+        let correctness_vec: Vec<i64> = inputs_raw.iter().map(|x| sgn_zero_is_one(*x)).collect();
+        let type_matching_result: Vec<i64> = h_result.iter().map(|x| iP_to_iT::<i64>(*x, log_p)).collect();
+        println!("Result:          {:?}", type_matching_result);
+        println!("Correctness Vec: {:?}", correctness_vec);
+
+        // Calculate correctness
+        let mut rights = 0;
+        for (inp, res) in correctness_vec.iter().zip(type_matching_result.iter()) {
+            if inp == res {
+                rights += 1;
+            }
+        }
+        let correctness = 100_f32 * rights as f32 / inputs_raw.len() as f32;
+
         println!("Correctness ({}-bit) = {:.4} %.", log_p-1, correctness);
     }
 

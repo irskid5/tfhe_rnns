@@ -5,7 +5,9 @@
 #![allow(unused_imports)]
 
 use colored::Colorize;
+use core::time;
 use std::error::Error;
+use time_graph;
 
 pub mod test_fns;
 pub mod mnist_rnn;
@@ -23,15 +25,15 @@ fn run_tests() -> Result<(), Box<dyn Error>> {
     
     // MULTI GPU, MULTI NUM CT TEST
     // let ct_nums = vec![8, 32, 128, 256, 512, 768, 1024, 1536, 2048];
-    // let precisions = vec![7, 8];
+    // let precisions = vec![6];
     // for p in precisions {
     //     for i in &ct_nums {
-    //         print_test_banner!(amortized_cuda_bs_test, true, *i as usize, 10, p, &*SET8);
+    //         print_test_banner!(amortized_cuda_bs_test, true, *i as usize, 10, p, &*SET10);
     //     }
     // }
 
     // MULTI GPU, SINGLE NUM CT TEST
-    // print_test_banner!(amortized_cuda_bs_test, true, 32000, 1, 8, &*SET8);
+    print_test_banner!(amortized_cuda_bs_test, true, 128, 50, 6, &*SET8);
 
     // print_test_banner!(fft_bootstrap_woppbs_test,);
 
@@ -52,11 +54,14 @@ fn run_mnist_rnn() -> Result<(), Box<dyn Error>> {
     println!("");
     println!("{}", "Beginning RNN runs.".bold());
     
-    print_rnn_banner!(mnist_rnn, false, false, &*SET8, 6);
+    // print_rnn_banner!(mnist_rnn, false, false, &*SET8, 6);
     Ok(())
 }
 
 fn main() {
+    // Do we enable timing collection?
+    // time_graph::enable_data_collection(true);
+
     match run_tests() {
         Ok(()) => println!("{}\n", "Tests completed.".bold()),
         Err(e) => {
@@ -78,6 +83,10 @@ fn main() {
             println!("");
         }
     };
+
+    // Get timings logged by time_graph
+    // let timings = time_graph::get_full_graph();
+    // println!("\n{}\n", timings.as_table());
 
     println!("End.");
 }
