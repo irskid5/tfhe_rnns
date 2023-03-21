@@ -3,6 +3,7 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 #![allow(unused_imports)]
+#![feature(int_roundings)]
 
 use concrete_core::prelude::*;
 
@@ -18,14 +19,146 @@ pub fn sign_lut(
     default_engine: &mut DefaultEngine,
 ) -> Result<GlweCiphertextVector64, Box<dyn Error>> 
 {
-    let luts = vec![1u64 << (log_q - log_p); num_cts * config.N.0]; // you create a num_ct*glwe_size vector for multiple glwe cts in a vector
-    let lut_pts = default_engine.create_plaintext_vector_from(&luts)?;
+    // Create raw sign lut
+    // chunk_size = N/(P/2) for P/2 elements
+    let start = config.N.0 - (config.N.0 >> log_p);
+    let mut luts: Vec<u64> = vec![];
+    for i in 0..num_cts {
+        let mut sign_lut = vec![1u64 << (log_q - log_p); config.N.0]; // Create all ones
+        for i in start..config.N.0 {
+            sign_lut[i] = u64::MAX << (log_q - log_p); // Last N/(2P) elements need to be -1 for correctness 
+        }
+        luts.append(&mut sign_lut);
+    }    
 
+    // Create GLWE trivial ciphertext
+    let lut_pts = default_engine.create_plaintext_vector_from(&luts)?;
     let result = default_engine
         .trivially_encrypt_glwe_ciphertext_vector(
             config.k.to_glwe_size(),
             GlweCiphertextCount(num_cts),
             &lut_pts,
         )?;
+        
+    Ok(result)
+}
+
+pub fn identity_lut(
+    log_p: i32,
+    log_q: i32,
+    num_cts: usize,
+    config: &Parameters,
+    default_engine: &mut DefaultEngine,
+) -> Result<GlweCiphertextVector64, Box<dyn Error>> 
+{
+    // if fn is not negacyclic, you encode all 2^log_p elements)
+    // for identity lut, fn is not negacyclic.
+    let chunk_size = config.N.0 >> log_p; // chunk_size = N/P for P elements
+    let half_chunk_size = chunk_size >> 1;
+    let end = config.N.0 - half_chunk_size;
+    let mut luts: Vec<u64> = vec![];
+    for i in 0..num_cts {
+        let mut identity_lut = vec![0u64; config.N.0]; // Create all zeros
+        for j in half_chunk_size..end {
+            identity_lut[j] = (((j + half_chunk_size) / chunk_size) as u64) << (log_q - log_p);
+        }
+        luts.append(&mut identity_lut);
+    }    
+
+    // DEBUG
+    // println!("identity lut = {:?}", &luts[0..config.N.0]);
+
+    // Create GLWE trivial ciphertext
+    let lut_pts = default_engine.create_plaintext_vector_from(&luts)?;
+    let result = default_engine
+        .trivially_encrypt_glwe_ciphertext_vector(
+            config.k.to_glwe_size(),
+            GlweCiphertextCount(num_cts),
+            &lut_pts,
+        )?;
+        
+    Ok(result)
+}
+
+pub fn absolute_lut(
+    log_p: i32,
+    log_q: i32,
+    num_cts: usize,
+    config: &Parameters,
+    default_engine: &mut DefaultEngine,
+) -> Result<GlweCiphertextVector64, Box<dyn Error>> 
+{
+    // Create raw sign lut (only encoding 2^(log_p-1) elements, negacyclic fn.
+    // if fn is not negacyclic, you encode all 2^log_p elements)
+    let chunk_size = config.N.0 >> (log_p - 1);
+    let half_chunk_size = chunk_size >> 1;
+    let end = config.N.0 - half_chunk_size;
+    let mut luts: Vec<u64> = vec![];
+    for i in 0..num_cts {
+        let mut identity_lut = vec![0u64; config.N.0]; // Create all zeros
+        for j in half_chunk_size..end {
+            identity_lut[j] = (((j + half_chunk_size) / chunk_size) as u64) << (log_q - log_p);
+        }
+        luts.append(&mut identity_lut);
+    }    
+
+    // DEBUG
+    // println!("identity lut = {:?}", &luts[0..config.N.0]);
+
+    // Create GLWE trivial ciphertext
+    let lut_pts = default_engine.create_plaintext_vector_from(&luts)?;
+    let result = default_engine
+        .trivially_encrypt_glwe_ciphertext_vector(
+            config.k.to_glwe_size(),
+            GlweCiphertextCount(num_cts),
+            &lut_pts,
+        )?;
+        
+    Ok(result)
+}
+
+pub fn sign_mult_lut(
+    log_p: i32,
+    log_q: i32,
+    num_cts: usize,
+    config: &Parameters,
+    default_engine: &mut DefaultEngine,
+) -> Result<GlweCiphertextVector64, Box<dyn Error>> 
+{
+    // Create raw sign lut (only encoding 2^(log_p-1) elements, negacyclic fn.
+    // if fn is not negacyclic, you encode all 2^log_p elements)
+    let chunk_size = config.N.0 >> (log_p - 1);
+    let half_chunk_size = chunk_size >> 1;
+    let end = config.N.0 - chunk_size;
+    let mut luts: Vec<u64> = vec![];
+    for i in 0..num_cts {
+        let mut identity_lut = vec![1u64 << (log_q - log_p); config.N.0]; // Create all zeros
+        // for j in 0..chunk_size {
+        //     identity_lut[i] = 1u64 << (log_q - log_p);
+        // }
+        for j in chunk_size..(config.N.0 >> 1) {
+            identity_lut[j] = u64::MAX << (log_q - log_p); // -1
+        }
+        // for j in (config.N.0 >> 1)..end {
+        //     identity_lut[j] = 1u64 << (log_q - log_p);
+        // }
+        for j in end..config.N.0 {
+            identity_lut[j] = u64::MAX << (log_q - log_p); // -1
+        }
+        luts.append(&mut identity_lut);
+    }    
+
+    // DEBUG
+    // println!("identity lut = {:?}", &luts[0..config.N.0]);
+
+    // Create GLWE trivial ciphertext
+    let lut_pts = default_engine.create_plaintext_vector_from(&luts)?;
+    let result = default_engine
+        .trivially_encrypt_glwe_ciphertext_vector(
+            config.k.to_glwe_size(),
+            GlweCiphertextCount(num_cts),
+            &lut_pts,
+        )?;
+        
     Ok(result)
 }

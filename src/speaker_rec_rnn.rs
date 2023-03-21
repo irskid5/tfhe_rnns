@@ -21,25 +21,12 @@ use crate::utils::keys::*;
 use crate::utils::luts::*;
 use crate::utils::layers::*;
 
-#[macro_export]
-macro_rules! print_rnn_banner {
-    ($func_name:ident, $($args:expr),*) => {
-        println!("\n--------------------------------------------------");
-        println!("Beginning {}", stringify!($func_name).to_uppercase());
-        println!("--------------------------------------------------\n");
-        $func_name($($args),*)?;
-        println!("\n--------------------------------------------------");
-        println!("Ending {}", stringify!($func_name).to_uppercase());
-        println!("--------------------------------------------------\n");
-    };
-}
-
-fn mnist_weights_import_hashmap(
+fn speaker_rec_weights_import_hashmap(
     filename: &str,
     default_engine: &mut DefaultEngine,
 ) -> Result<HashMap<String, Array2<i8>>, Box<dyn Error>> {
     // Open the HDF5 file and get the datasets for the weight matrices
-    println!("Loading MNIST RNN weights into hashmap<name, array>.");
+    println!("Loading SpeakerRec RNN weights into hashmap<name, array>.");
     println!("Loading from {}", filename);
     let file = hdf5::File::open(filename)?;
 
@@ -49,10 +36,12 @@ fn mnist_weights_import_hashmap(
     println!("Opening HDF5 file, is_empty = {:?}", file.is_empty());
 
     let mut datasets: Vec<Dataset> = Vec::new();
-    datasets.push(file.dataset("QRNN_0/QRNN_0/QRNN_0/quantized_kernel:0")?);
-    datasets.push(file.dataset("QRNN_0/QRNN_0/QRNN_0/quantized_recurrent_kernel:0")?);
-    datasets.push(file.dataset("QRNN_1/QRNN_1/QRNN_1/quantized_kernel:0")?);
-    datasets.push(file.dataset("QRNN_1/QRNN_1/QRNN_1/quantized_recurrent_kernel:0")?);
+    datasets.push(file.dataset("IRNN_0/IRNN_0/IRNN_0/quantized_kernel:0")?);
+    datasets.push(file.dataset("IRNN_0/IRNN_0/IRNN_0/quantized_recurrent_kernel:0")?);
+    datasets.push(file.dataset("IRNN_1/IRNN_1/IRNN_1/quantized_kernel:0")?);
+    datasets.push(file.dataset("IRNN_1/IRNN_1/IRNN_1/quantized_recurrent_kernel:0")?);
+    datasets.push(file.dataset("SA_0_QDENSE_0/SA_0_QDENSE_0/quantized_kernel:0")?);
+    datasets.push(file.dataset("SA_0_QDENSE_1/SA_0_QDENSE_1/quantized_kernel:0")?);
     datasets.push(file.dataset("DENSE_0/DENSE_0/quantized_kernel:0")?);
     datasets.push(file.dataset("DENSE_OUT/DENSE_OUT/quantized_kernel:0")?);
 
@@ -74,7 +63,7 @@ fn mnist_weights_import_hashmap(
     }
 
     // Print the weight matrices in the HashMap
-    println!("Loaded weights.");
+    // println!("Loaded weights.");
     // for (name, matrix) in weight_matrices.iter() {
     //     println!("{}:\n{:?}", name, matrix);
     // }
@@ -83,7 +72,7 @@ fn mnist_weights_import_hashmap(
 }
 
 #[instrument]
-pub fn mnist_rnn(
+pub fn speaker_rec_rnn(
     run_pt: bool,
     run_ct: bool,
     config: &Parameters,
@@ -101,32 +90,28 @@ pub fn mnist_rnn(
     ) = init_engines(UNSAFE_SECRET)?;
 
     // Create keys
-    // let h_keys: Keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
-    // save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
-    let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
+    let h_keys: Keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
+    save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
+    // let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
     let d_keys: CudaKeys = get_cuda_keys(&h_keys, &mut cuda_engine)?;
     println!("{:?}", config);
 
     // Establish precision
     let log_q: i32 = 64;
-    let log_p: i32 = precision + 1;
+    let log_p: i32 = precision;
     let round_off: u64 = 1u64 << (log_q - log_p - 1);
 
     // Import dataset
-    let mnist_config: MNISTConfig = MNISTConfig {
-        mnist_images_file:
-            "/data/dev/masters/tf_speaker_rec/mnist_preprocessed/mnist_images_norm_tern.npy",
-        mnist_labels_file: "/data/dev/masters/tf_speaker_rec/mnist_preprocessed/mnist_labels.npy",
+    let voxceleb_config: VoxCelebConfig = VoxCelebConfig {
+        voxceleb_file:
+            "/data/dev/masters/tf_speaker_rec/voxceleb_preprocessed/voxceleb_tern.npz",
+        voxceleb_labels_file: "/data/dev/masters/tf_speaker_rec/voxceleb_preprocessed/voxceleb_labels.npy",
     };
-    let (mut x, mut y): (ndarray::ArrayD<i8>, ndarray::ArrayD<i8>) = import_mnist(&mnist_config)?;
-    let mut x = x.into_dimensionality::<Ix3>()?;
-    let mut y = y.into_dimensionality::<Ix1>()?;
+    let (mut x, mut y): (Vec<Array2<i8>>, ndarray::Array1<i8>) = import_voxceleb(&voxceleb_config)?;
 
     // Import weights
-    let weights: HashMap<String, Array2<i8>> = mnist_weights_import_hashmap(
-        "/home/vele/Documents/masters/mnist_rnn/runs/202302/20230205-190604/checkpoints/hdf5/weights.hdf5", // 6-bit, 92%
-        // "/home/vele/Documents/masters/mnist_rnn/runs/202303/20230309-102046/checkpoints/hdf5/weights.hdf5", // 6-bit, 92%, L1 out
-        // "/home/vele/Documents/masters/mnist_rnn/runs/202302/20230205-174932/checkpoints/hdf5/weights.hdf5", // any-bit, 95%
+    let weights: HashMap<String, Array2<i8>> = speaker_rec_weights_import_hashmap(
+        "/home/vele/Documents/masters/tf_speaker_rec_runs/runs/202302/20230208-192733/checkpoints/hdf5/weights.hdf5",
         &mut default_engine
     )?;
 
@@ -135,11 +120,8 @@ pub fn mnist_rnn(
     // Loop through dataset (one epoch)
     let mut correct_preds = 0;
     let mut pt_correct_preds = 0;
-    let mut dense_out_dif_percent: Vec<f32> = vec![];
-    let mut dense_out_mae: Vec<f32> = vec![];
-    let dense_out_num_accs = 4;
     let num_test_images = 100;
-    for (i, img) in x.axis_iter(ndarray::Axis(0)).enumerate() {
+    for (i, sample) in x.iter().enumerate() {
         
         // Stopping condition
         if i == num_test_images {
@@ -149,21 +131,20 @@ pub fn mnist_rnn(
         println!("Running sample {} ------------------------------------------------------------------", i+1);
 
         // Encrypt inputs
-        let pt = img.clone().to_owned().mapv(|x| x as i32);
-        let ct = encrypt_lwe_array(&img, log_p, log_q, &h_keys.extracted, &config, &mut default_engine)?;
-
-        // -------------------------- START ENCRYPTED FWD STEP ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+        let recording = sample.view();
+        let pt = recording.clone().to_owned().mapv(|x| x as i32);
+        let ct = encrypt_lwe_array(&recording, log_p, log_q, &h_keys.extracted, &config, &mut default_engine)?;
 
         println!("Beginning encrypted run.");
 
         // RNN BLOCK 0 --------------------------------------------------------------------------------------------------------
-        let (qrnn_0, pt_qrnn_0) = spanned!("qrnn_0", {
+        let (qrnn_0, pt_qrnn_0) = spanned!("irnn_0", {
             encrypted_rnn_block(
                 &ct.view(),
                 &pt.view(),
-                &weights["QRNN_0/quantized_kernel:0"].view(),
-                &weights["QRNN_0/quantized_recurrent_kernel:0"].view(),
-                "QRNN_0",
+                &weights["IRNN_0/quantized_kernel:0"].view(),
+                &weights["IRNN_0/quantized_recurrent_kernel:0"].view(),
+                "IRNN_0",
                 log_p, log_q,
                 &d_keys,&h_keys, config,
                 &mut cuda_engine,&mut amortized_cuda_engine,&mut default_engine,
@@ -179,13 +160,13 @@ pub fn mnist_rnn(
         // ---------------------------------------------------------------------------------------------------------------------
 
         // RNN BLOCK 1 ---------------------------------------------------------------------------------------------------------
-        let (qrnn_1, pt_qrnn_1) = spanned!("qrnn_1", {
+        let (qrnn_1, pt_qrnn_1) = spanned!("irnn_1", {
             encrypted_rnn_block(
                 &tr,
                 &pt_tr,
-                &weights["QRNN_1/quantized_kernel:0"].view(),
-                &weights["QRNN_1/quantized_recurrent_kernel:0"].view(),
-                "QRNN_1",
+                &weights["IRNN_1/quantized_kernel:0"].view(),
+                &weights["IRNN_1/quantized_recurrent_kernel:0"].view(),
+                "IRNN_1",
                 log_p, log_q,
                 &d_keys, &h_keys, config,
                 &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
@@ -194,17 +175,43 @@ pub fn mnist_rnn(
         // println!("Finished encrypted QRNN_1.");
         // ---------------------------------------------------------------------------------------------------------------------
 
-        // FLATTEN -------------------------------------------------------------------------------------------------------------
-        let flattened = flatten_2D(qrnn_1.view())?;
-        let pt_flattened = flatten_2D(pt_qrnn_1.view())?;
-        // println!("Finished encrypted FLATTEN.");
-        // ---------------------------------------------------------------------------------------------------------------------
+        // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
+        let (sa_dense_0, pt_sa_dense_0) = spanned!("sa_dense_0", {
+            encrypted_dense_block(
+                &qrnn_1.view(),
+                &pt_qrnn_1.view(),
+                &weights["SA_0_QDENSE_0/quantized_kernel:0"].view(),
+                "SA_DENSE_0",
+                true,
+                1,
+                log_p, log_q,
+                &d_keys, &h_keys, config,
+                &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
+            )?
+        });
 
+        // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
+        let (sa_dense_1, pt_sa_dense_1) = spanned!("sa_dense_1", {
+            encrypted_dense_block(
+                &sa_dense_0.view(),
+                &pt_sa_dense_0.view(),
+                &weights["SA_0_QDENSE_1/quantized_kernel:0"].view(),
+                "SA_DENSE_1",
+                true,
+                1,
+                log_p, log_q,
+                &d_keys, &h_keys, config,
+                &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
+            )?
+        });
+        
+        break;
+        
         // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
         let (dense_0, pt_dense_0) = spanned!("dense_0", {
             encrypted_dense_block(
-                &flattened,
-                &pt_flattened,
+                &qrnn_1.view(),
+                &pt_qrnn_1.view(),
                 &weights["DENSE_0/quantized_kernel:0"].view(),
                 "DENSE_0",
                 true,
@@ -225,7 +232,7 @@ pub fn mnist_rnn(
                 &weights["DENSE_OUT/quantized_kernel:0"].view(),
                 "DENSE_OUT",
                 false,
-                dense_out_num_accs,
+                1,
                 log_p, log_q,
                 &d_keys, &h_keys, config,
                 &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
@@ -235,7 +242,7 @@ pub fn mnist_rnn(
         // println!("Finished encrypted DENSE_OUT.");
         // ---------------------------------------------------------------------------------------------------------------------
 
-        // Decrypt, convert to signed
+        // Decrypt, convert to signed, and calculate softmax + argmax
         let mut ct_logits: Array2<u64> = decrypt_lwe_array(
             &dense_out.view(),
             log_p,
@@ -245,15 +252,9 @@ pub fn mnist_rnn(
         )?;
         let mut ct_logits = ct_logits.mapv(|x| iP_to_iT::<i32>(x, log_p));
         let mut ct_logits = ct_logits.sum_axis(Axis(0));
-        let pt_dense_out = pt_dense_out.into_shape(ct_logits.dim())?;
-
-        // Calculate some stats
-        let dense_out_stats = check_pt_pt_difference(&ct_logits.view(), &pt_dense_out.view(), format!("{}: output", "DENSE_OUT").as_str(), false)?;
-        dense_out_dif_percent.push(dense_out_stats.0);
-        dense_out_mae.push(dense_out_stats.1);
-
-        // Get result
+        // println!("Decrypted results.");
         let ct_result = compute_softmax_then_argmax(&ct_logits)?;
+        // println!("Computed softmax + argmax.");
         println!("Completed encrypted run.");
 
         
@@ -312,11 +313,11 @@ pub fn mnist_rnn(
 
         // }
 
-        let pt_result = compute_softmax_then_argmax(&pt_dense_out)?;
+        let pt_result = compute_softmax_then_argmax(&pt_dense_out.row(0).to_owned())?;
         println!("Completed plaintext run.\n");
 
-        println!("Encrypted MNIST RNN result: {}", ct_result);
-        println!("Plaintext MNIST RNN result: {}", pt_result);
+        println!("Encrypted SpeakerRec RNN result: {}", ct_result);
+        println!("Plaintext SpeakerRec RNN result: {}", pt_result);
         println!("True result:                {}\n", y[[i]]);
 
         // Metric calculations
@@ -330,20 +331,11 @@ pub fn mnist_rnn(
         println!("Correct PT predictions = {}\n", pt_correct_preds);
     }
 
-    // Stat calculations
+    // Accuracy calculations
     let acc = 100_f32 * correct_preds as f32 / num_test_images as f32;
     let pt_acc = 100_f32 * pt_correct_preds as f32 / num_test_images as f32;
-    println!("\nCompleted {} predictions!", num_test_images);
-    println!("\nAccuracy Statistics...");
-    println!("CT Accuracy = {:.2}%", acc);
+    println!("\nCT Accuracy = {:.2}%", acc);
     println!("PT Accuracy = {:.2}%", pt_acc);
-
-    let dense_out_dif_percent = arr1(&dense_out_dif_percent);
-    let dense_out_mae = arr1(&dense_out_mae);
-    println!("\nDENSE_OUT Statistics...");
-    println!("Number of accumulators                 = {}", dense_out_num_accs);
-    println!("Percent different elements (mean, std) = ({:.2}%, {:.2}%)", dense_out_dif_percent.mean().unwrap(), dense_out_dif_percent.std(0f32));
-    println!("MAE (mean, std)                        = ({:.2}, {:.2})", dense_out_mae.mean().unwrap(), dense_out_mae.std(0f32));
 
     Ok(())
 }

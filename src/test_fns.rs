@@ -11,6 +11,7 @@ use hdf5::H5Type;
 use hdf5::{File, Dataset};
 use std::collections::HashMap;
 use ndarray::*;
+use time_graph::*;
 
 use std::time::Instant;
 
@@ -141,26 +142,25 @@ pub fn amortized_cuda_bs_test(
     ) = init_engines(UNSAFE_SECRET)?;
 
     // Create keys
-    let h_keys: Keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
-    save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
-    // let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
+    // let h_keys: Keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
+    // save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
+    let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
 
     // Establish precision
     let log_q: i32 = 64;
-    let log_p: i32 = precision + 1;
+    let log_p: i32 = precision;
     let round_off: u64 = 1u64 << (log_q - log_p - 1);
 
     // Encrypt inputs/outputs
-    // let inputs: Vec<u64> = vec![1u64 << (log_q - log_p); num_cts];
-    let num_cts: usize = 1 << log_p - 1;
-    let half_range = 1 << (log_p - 1 - 1);
+    let inputs_raw = vec![0_i64; num_cts];   
+    // let num_cts: usize = 1 << log_p;
+    // let half_range = 1 << (log_p - 1);
 
-    let inputs_raw: Vec<i64> = (-half_range..half_range).collect(); // The whole domain
-    let inputs: Vec<u64> = inputs_raw
-        .iter()
-        .map(|x| (*x as u64) << (log_q - log_p))
-        .collect();
-    println!("inputs: {:?}", inputs_raw);
+    // let inputs_raw: Vec<i64> = (-half_range..half_range).collect(); // The whole domain
+    // let inputs_raw: Vec<i64> = vec![-2, -2, 2, 0, 0, 2, -2, -2, 0, 0];
+    // let num_cts = inputs_raw.len();
+    let inputs: Vec<u64> = inputs_raw.iter().map(|x| (*x as u64) << (log_q - log_p)).collect();
+    // println!("inputs: {:?}", inputs_raw);
 
     let h_inp_pts = default_engine.create_plaintext_vector_from(&inputs)?;
     let h_inp_cts =
@@ -172,7 +172,7 @@ pub fn amortized_cuda_bs_test(
     )?;
 
     // Create LUTs
-    let h_luts = sign_lut(log_p, log_q, num_cts, &config, &mut default_engine)?;
+    let h_luts = sign_mult_lut(log_p, log_q, num_cts, &config, &mut default_engine)?;
 
     // Send data to GPU (MULTIPLE CT)
     // send input to the GPU
@@ -204,28 +204,15 @@ pub fn amortized_cuda_bs_test(
     // measurements = measurements.iter().map(|x| x * 1e-6).collect();
     // println!("Measurement list: {:?}", measurements);
 
-    println!(
-        "Avg duration of {} bootstraps (precision of {}-bits, {} number of measurements) = {:.4} ms",
-        num_cts, log_p-1, num_measurements, avg_ms
-    );
+    println!("Avg duration of {} bootstraps (precision of {}-bits, {} number of measurements) = {:.4} ms", num_cts, log_p-1, num_measurements, avg_ms);
 
     if decrypt {
         h_out_cts = cuda_engine.convert_lwe_ciphertext_vector(&d_out_cts)?;
 
-        let h_result_pts =
-            default_engine.decrypt_lwe_ciphertext_vector(&h_keys.extracted, &h_out_cts)?;
-
+        let h_result_pts = default_engine.decrypt_lwe_ciphertext_vector(&h_keys.extracted, &h_out_cts)?;
         let h_result_raw = default_engine.retrieve_plaintext_vector(&h_result_pts)?;
-
-        let h_result: Vec<u64> = h_result_raw
-            .iter()
-            .map(|x| (x + round_off) >> (log_q - log_p))
-            .collect();
+        let h_result: Vec<u64> = h_result_raw.iter().map(|x| (x + round_off) >> (log_q - log_p)).collect();
         println!("Result raw: {:?}", &h_result[0..]);
-
-        // This is for when we want to just use [1,1,1,1,1,...] as the input and measure bs correctness
-        // let correctness_vec: Vec<u64> = h_result.iter().map(|x| if *x != 1 {0} else {1}).collect();
-        // let correctness = correctness_vec.iter().sum::<u64>() as f64 / correctness_vec.len() as f64 * 100 as f64; 
 
         let correctness_vec: Vec<i64> = inputs_raw.iter().map(|x| sgn_zero_is_one(*x)).collect();
         let type_matching_result: Vec<i64> = h_result.iter().map(|x| iP_to_iT::<i64>(*x, log_p)).collect();
@@ -245,6 +232,93 @@ pub fn amortized_cuda_bs_test(
     }
 
     Ok(())
+}
+
+
+pub fn agnes_332() -> Result<(), Box<dyn Error>> {
+    let (lwe_dim, lwe_dim_output, glwe_dim, poly_size) = (
+        LweDimension(732),
+        LweDimension(2048),
+        GlweDimension(1),
+        PolynomialSize(2048),
+        );
+    let number_of_inputs = 21846;
+    let log_degree = f64::log2(poly_size.0 as f64) as i32;
+    let val: u64 = ((poly_size.0 as f64 - (10. * f64::sqrt((lwe_dim.0 as f64) / 16.0)))
+                    * 2_f64.powi(64 - log_degree - 1)) as u64;
+    let input = vec![val; number_of_inputs];
+    let noise = Variance(2_f64.powf(-29.));
+    let (dec_lc, dec_bl) = (DecompositionLevelCount(3), DecompositionBaseLog(14));
+    // An identity function is applied during the bootstrap
+    let mut lut = vec![0u64; poly_size.0 * number_of_inputs];
+    for i in 0..poly_size.0 {
+        let l = (i as f64 * 2_f64.powi(64 - log_degree - 1)) as u64;
+        lut[i] = l;
+        lut[i + poly_size.0] = l;
+        lut[i + 2 * poly_size.0] = l;
+    }
+
+    // 1. default engine
+    const UNSAFE_SECRET: u128 = 0;
+    let mut default_engine = DefaultEngine::new(Box::new(UnixSeeder::new(UNSAFE_SECRET)))?;
+    let mut default_parallel_engine =
+        DefaultParallelEngine::new(Box::new(UnixSeeder::new(UNSAFE_SECRET)))?;
+    // create a vector of LWE ciphertexts
+    let h_input_key: LweSecretKey64 = default_engine.generate_new_lwe_secret_key(lwe_dim)?;
+    let h_input_plaintext_vector: PlaintextVector64 =
+        default_engine.create_plaintext_vector_from(&input)?;
+    let h_input_ciphertext_vector: LweCiphertextVector64 = default_engine
+        .encrypt_lwe_ciphertext_vector(&h_input_key, &h_input_plaintext_vector, noise)?;
+    // create a vector of GLWE ciphertexts containing the encryptions of the LUTs
+    let h_lut_plaintext_vector = default_engine.create_plaintext_vector_from(&lut)?;
+    let h_lut_key: GlweSecretKey64 =
+        default_engine.generate_new_glwe_secret_key(glwe_dim, poly_size)?;
+    let h_lut_vector = default_engine.encrypt_glwe_ciphertext_vector(
+        &h_lut_key,
+        &h_lut_plaintext_vector,
+        noise,
+        )?;
+    // create a BSK
+    let h_bootstrap_key: LweBootstrapKey64 = default_parallel_engine.generate_new_lwe_bootstrap_key(
+        &h_input_key,
+        &h_lut_key,
+        dec_bl,
+        dec_lc,
+        noise,
+        )?;
+    // initialize an output LWE ciphertext vector
+    let h_dummy_key: LweSecretKey64 = default_engine.generate_new_lwe_secret_key(lwe_dim_output)?;
+
+    // 2. cuda engine
+    let mut cuda_engine = CudaEngine::new(())?;
+    println!("Running on {} GPUs.", cuda_engine.get_number_of_gpus().0);
+    let mut cuda_amortized_engine = AmortizedCudaEngine::new(())?;
+    // convert input to GPU (split over the GPUs)
+    let d_input_ciphertext_vector: CudaLweCiphertextVector64 =
+        cuda_engine.convert_lwe_ciphertext_vector(&h_input_ciphertext_vector)?;
+    // convert accumulators to GPU
+    let d_input_lut_vector: CudaGlweCiphertextVector64 =
+        cuda_engine.convert_glwe_ciphertext_vector(&h_lut_vector)?;
+    // convert BSK to GPU (and from Standard to Fourier representations)
+    let d_fourier_bsk: CudaFourierLweBootstrapKey64 =
+        cuda_engine.convert_lwe_bootstrap_key(&h_bootstrap_key)?;
+    // launch bootstrap on GPU
+    let h_zero_output_ciphertext_vector: LweCiphertextVector64 = default_engine
+        .zero_encrypt_lwe_ciphertext_vector(&h_dummy_key, noise, LweCiphertextCount(number_of_inputs))?;
+    let mut d_output_ciphertext_vector: CudaLweCiphertextVector64 =
+        cuda_engine.convert_lwe_ciphertext_vector(&h_zero_output_ciphertext_vector)?;
+    println!("Execute PBS");
+    spanned!(
+        "pbs", 
+        cuda_amortized_engine.discard_bootstrap_lwe_ciphertext_vector(
+        &mut d_output_ciphertext_vector,
+        &d_input_ciphertext_vector,
+        &d_input_lut_vector,
+        &d_fourier_bsk,
+        )?);
+    
+    Ok(())
+
 }
 
 

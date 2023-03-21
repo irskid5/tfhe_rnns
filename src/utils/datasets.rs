@@ -4,14 +4,48 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use ndarray::prelude::*;
-use npyz;
+use ndarray::{prelude::*, parallel::prelude::IntoParallelIterator};
+use npyz::{NpyFile, WriterBuilder, npz};
+use indicatif::*;
+use rayon::prelude::*;
 
-use std::error::Error;
+use std::{error::Error, fs::File, io};
 
 pub struct MNISTConfig {
     pub mnist_images_file: &'static str,
     pub mnist_labels_file: &'static str,
+}
+
+pub struct VoxCelebConfig {
+    pub voxceleb_file: &'static str,
+    pub voxceleb_labels_file: &'static str,
+}
+
+fn import_npz_into_vector(filename: &str) -> Result<Vec<Array2<i8>>, Box<dyn Error>> {
+    let mut file = npz::NpzArchive::open(filename)?;
+    let num_samples = file.zip_archive().len();
+    println!("Number of files in {} = {}", filename, num_samples);
+
+    let num_samples = 10;
+
+    println!("Importing (parallel) from {}", filename);
+    let empty_element = Array2::from_elem((2,2), 1 as i8);
+    let mut output = vec![empty_element; num_samples];
+    output.par_iter_mut().enumerate().progress_count(num_samples as u64).for_each(|(i, mut arr)| {
+        let mut file = npz::NpzArchive::open(filename).unwrap();
+        let array_name = format!("arr_{}", i);
+        let reader = file.by_name(array_name.as_str()).unwrap().unwrap();
+        let shape = reader.shape().to_vec();
+        let order = reader.order();
+        let data: Vec<i8> = reader.into_vec::<i8>().unwrap();
+        let array = to_array_d(data.clone(), shape.clone(), order);
+        let array = array.into_dimensionality::<Ix2>().unwrap();
+
+        *arr = array;
+    });
+    println!("Importing from {} completed!", filename);
+
+    Ok(output)
 }
 
 fn import_npy_into_array(filename: &str) -> Result<ndarray::ArrayD<i8>, Box<dyn Error>> {
@@ -69,6 +103,43 @@ pub fn import_mnist(mnist_config: &MNISTConfig) -> Result<(ndarray::ArrayD<i8>, 
     //         println!("");
     //         for j in 0..28 {
     //             print!("{}", x[[b, i, j]])
+    //         }
+    //     }
+    //     print!("         {}", y[[b]])
+    // }
+    // Seems like this is working, giving me images and labels
+
+    Ok((x, y))
+}
+
+pub fn import_voxceleb(voxceleb_config: &VoxCelebConfig) -> Result<(Vec<Array2<i8>>, ndarray::Array1<i8>), Box<dyn Error>> {
+    let x: Vec<Array2<i8>> = import_npz_into_vector(&voxceleb_config.voxceleb_file)?;
+    let y: ndarray::ArrayD<i8> = import_npy_into_array(&voxceleb_config.voxceleb_labels_file)?;
+    let y = y.into_dimensionality::<Ix1>()?;
+    // assert_eq!(dim, &(10000, 28, 28));
+    // assert_eq!(img_data.order(), npyz::Order::C);
+
+    // NOTE: for voxceleb, 132 <= 1st dim <= 2548, mean=261
+
+    // println!("{:?}", x.dim());
+    // println!("{:?}", y.dim());
+
+    // for i in 0..10 {
+    //     println!("{:?}", x[[i]].dim());
+    // }
+    
+    // RESHAPE OP
+    // let x = x.into_shape(IxDyn(&[10000, 28, 28, 1]))?;
+
+    // DOCS: https://docs.rs/ndarray/latest/ndarray/struct.ArrayBase.html#conversions
+
+    // TEST ARRAY
+    // for b in 0..10 {
+    //     println!("\n");
+    //     for i in 0..28 {
+    //         println!("");
+    //         for j in 0..28 {
+    //             print!("{}", x[b][[i,j]])
     //         }
     //     }
     //     print!("         {}", y[[b]])
