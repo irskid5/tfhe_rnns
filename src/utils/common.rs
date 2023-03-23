@@ -300,6 +300,54 @@ pub fn sign_activation(
     Ok(result)
 }
 
+
+/**
+ * IMPORTANT!
+ * This is a dot product between input_1 and input_2
+ * which have elements in in {-1, +1} only. This will
+ * not work for other CT arrays with different domains.
+ */
+#[instrument]
+pub fn ct_dot_product(
+    input_1: &ArrayView1<LweCiphertext64>,
+    input_2: &ArrayView1<LweCiphertext64>,
+    d_temp: &mut CudaLweCiphertextVector64, // Can be persistant (per layer or per equal sized array)
+    d_output: &mut CudaLweCiphertextVector64,
+    d_mult_luts: &CudaGlweCiphertextVector64, // Can be persistant (per layer or per equal sized array)
+    d_keys: &CudaKeys,
+    cuda_engine: &mut CudaEngine,
+    amortized_cuda_engine: &mut AmortizedCudaEngine,
+    default_engine: &mut DefaultEngine,
+) -> Result<LweCiphertext64, Box<dyn Error>> {
+    // Input vector = (input_1 - input_2)
+    //
+    //  a, b | a*b | a-b | LUT(a-b)
+    //  1, 1 |  1  |  0  |  1       
+    //  1,-1 | -1  |  2  | -1      
+    // -1, 1 | -1  | -2  | -1       
+    // -1,-1 |  1  |  0  |  1      
+    let input_vec_1 = populate_lwe_vector(input_1.to_owned(), default_engine)?;
+    let input_vec_2 = populate_lwe_vector(input_2.to_owned(), default_engine)?;
+    let mut input_vec = input_vec_1.clone();
+    default_engine.discard_sub_lwe_ciphertext_vector(&mut input_vec, &input_vec_1, &input_vec_2)?; // a-b
+    let d_input_vec = cuda_engine.convert_lwe_ciphertext_vector(&input_vec)?;
+
+    // Perform lut evaluation
+    // amortized_pbs(d_output, &d_input_vec, d_mult_luts, d_keys, cuda_engine, amortized_cuda_engine)?;
+    amortized_ks_pbs(d_output, d_temp, &d_input_vec, d_mult_luts, d_keys, cuda_engine, amortized_cuda_engine)?;
+
+    // Repopulate output array
+    let h_output = cuda_engine.convert_lwe_ciphertext_vector(d_output)?;
+    let result_array = depopulate_lwe_vector(h_output, default_engine)?;
+
+    // Perform sum step in dot product
+    let acc_pt = default_engine.create_plaintext_from(&0u64)?;
+    let mut acc = default_engine.trivially_encrypt_lwe_ciphertext(input_1[[0]].lwe_dimension().to_lwe_size(), &acc_pt)?;
+    result_array.for_each(|x| default_engine.fuse_add_lwe_ciphertext(&mut acc, x).unwrap());
+
+    Ok(acc)
+}
+
 pub fn sgn_zero_is_one<T: Signed + AddAssign>(x: T) -> T {
     let mut s = x.signum();
     if s == T::zero() {
@@ -389,6 +437,20 @@ pub fn compute_softmax_then_argmax<T: Integer + NumCast + Clone>(
     let softmax_output = softmax(a)?;
     let argmax = a.argmax()?;
     Ok(argmax)
+}
+
+pub fn return_top_n<T: SignedInteger + NumCast + Clone>(
+    a: &Array1<T>,
+    n: usize
+) -> Result<Array1<usize>, Box<dyn Error>> {
+    let mut tmp = a.clone();
+    let mut topn = arr1(&vec![0; n]);
+    for i in 0..n {
+        let top1 = tmp.argmax()?;
+        tmp[top1] = -T::MAX;
+        topn[[i]] = top1;
+    }
+    Ok(topn)
 }
 
 // Converts a value of signed precision p stored in a u64 to any signed integer you want.

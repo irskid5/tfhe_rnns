@@ -90,9 +90,9 @@ pub fn speaker_rec_rnn(
     ) = init_engines(UNSAFE_SECRET)?;
 
     // Create keys
-    let h_keys: Keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
-    save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
-    // let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
+    // let h_keys: Keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
+    // save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
+    let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
     let d_keys: CudaKeys = get_cuda_keys(&h_keys, &mut cuda_engine)?;
     println!("{:?}", config);
 
@@ -107,7 +107,7 @@ pub fn speaker_rec_rnn(
             "/data/dev/masters/tf_speaker_rec/voxceleb_preprocessed/voxceleb_tern.npz",
         voxceleb_labels_file: "/data/dev/masters/tf_speaker_rec/voxceleb_preprocessed/voxceleb_labels.npy",
     };
-    let (mut x, mut y): (Vec<Array2<i8>>, ndarray::Array1<i8>) = import_voxceleb(&voxceleb_config)?;
+    let (mut x, mut y): (Vec<Array2<i8>>, ndarray::Array1<i32>) = import_voxceleb(&voxceleb_config)?;
 
     // Import weights
     let weights: HashMap<String, Array2<i8>> = speaker_rec_weights_import_hashmap(
@@ -120,20 +120,21 @@ pub fn speaker_rec_rnn(
     // Loop through dataset (one epoch)
     let mut correct_preds = 0;
     let mut pt_correct_preds = 0;
-    let num_test_images = 100;
+    let num_test_images = 10;
+    // let _pt = default_engine.create_plaintext_from(&0u64)?;
+    // let _ct = default_engine.trivially_encrypt_lwe_ciphertext(LweSize(config.N.0+1), &_pt)?;
     for (i, sample) in x.iter().enumerate() {
-        
         // Stopping condition
         if i == num_test_images {
             break;
         }
-
         println!("Running sample {} ------------------------------------------------------------------", i+1);
 
         // Encrypt inputs
-        let recording = sample.view();
+        let recording = sample.view(); //.slice(s![0..10,..]);
         let pt = recording.clone().to_owned().mapv(|x| x as i32);
         let ct = encrypt_lwe_array(&recording, log_p, log_q, &h_keys.extracted, &config, &mut default_engine)?;
+        // let ct: Array2<LweCiphertext64> = Array2::from_shape_vec(pt.dim(), vec![_ct.clone(); pt.dim().0*pt.dim().1])?;
 
         println!("Beginning encrypted run.");
 
@@ -189,7 +190,7 @@ pub fn speaker_rec_rnn(
                 &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
             )?
         });
-
+        
         // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
         let (sa_dense_1, pt_sa_dense_1) = spanned!("sa_dense_1", {
             encrypted_dense_block(
@@ -205,13 +206,28 @@ pub fn speaker_rec_rnn(
             )?
         });
         
-        break;
+        let (mult_layer, pt_mult_layer) = spanned!("sa_dot", { 
+            multiplication_layer(
+                &qrnn_1.view(),
+                &sa_dense_1.view(),
+                &pt_qrnn_1.view(),
+                &pt_sa_dense_1.view(),
+                "SA_DOT",
+                log_p, log_q,
+                &d_keys, &h_keys, config,
+                &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
+            )?
+        });
+
+        // FLATTEN -------------------------------------------------------------------------------------------------------------
+        let flattened = flatten_2D(mult_layer.view())?;
+        let pt_flattened = flatten_2D(pt_mult_layer.view())?;
         
         // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
         let (dense_0, pt_dense_0) = spanned!("dense_0", {
             encrypted_dense_block(
-                &qrnn_1.view(),
-                &pt_qrnn_1.view(),
+                &flattened.view(),
+                &pt_flattened.view(),
                 &weights["DENSE_0/quantized_kernel:0"].view(),
                 "DENSE_0",
                 true,
@@ -238,11 +254,11 @@ pub fn speaker_rec_rnn(
                 &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
             )?
         });
-        // check_pt_ct_difference(&dense_out.view(), &pt_dense_out.view(), format!("{}: output", "DENSE_OUT").as_str(), false, log_p, log_q, &h_keys, &mut default_engine)?;
+        check_pt_ct_difference(&dense_out.view(), &pt_dense_out.view(), format!("{}: output", "DENSE_OUT").as_str(), false, log_p, log_q, &h_keys, &mut default_engine)?;
         // println!("Finished encrypted DENSE_OUT.");
         // ---------------------------------------------------------------------------------------------------------------------
 
-        // Decrypt, convert to signed, and calculate softmax + argmax
+        // Decrypt, convert to signed
         let mut ct_logits: Array2<u64> = decrypt_lwe_array(
             &dense_out.view(),
             log_p,
@@ -252,79 +268,31 @@ pub fn speaker_rec_rnn(
         )?;
         let mut ct_logits = ct_logits.mapv(|x| iP_to_iT::<i32>(x, log_p));
         let mut ct_logits = ct_logits.sum_axis(Axis(0));
-        // println!("Decrypted results.");
-        let ct_result = compute_softmax_then_argmax(&ct_logits)?;
-        // println!("Computed softmax + argmax.");
-        println!("Completed encrypted run.");
+        let pt_dense_out = pt_dense_out.into_shape(ct_logits.dim())?;
 
-        
+        // Get result
+        let ct_result = compute_softmax_then_argmax(&ct_logits)?;
+        let ct_top_5 = return_top_n(&ct_logits, 5)?;
+        println!("Completed encrypted run.");
 
         // -------------------------- END ENCRYPTED FWD STEP ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-        // ======================================================================================================================================================================================================================================
-        // ======================================================================================================================================================================================================================================
-        // ======================================================================================================================================================================================================================================
-
-        // -------------------------- BEGIN PLAINTEXT FWD STEP ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-        // {
-
-        //     println!("Beginning plaintext run.");
-
-        //     // RNN BLOCK 0 --------------------------------------------------------------------------------------------------------
-        //     let pt_qrnn_0 = plaintext_rnn_block(
-        //         &pt.view(),
-        //         &weights["QRNN_0/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         &weights["QRNN_0/quantized_recurrent_kernel:0"].mapv(|x| x as i32).view()
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // TIME REDUCTION LAYER ------------------------------------------------------------------------------------------------
-        //     let pt_tr = time_reduction(pt_qrnn_0.view())?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // RNN BLOCK 1 ---------------------------------------------------------------------------------------------------------
-        //     let pt_qrnn_1 = plaintext_rnn_block(
-        //         &pt_tr,
-        //         &weights["QRNN_1/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         &weights["QRNN_1/quantized_recurrent_kernel:0"].mapv(|x| x as i32).view()
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // FLATTEN -------------------------------------------------------------------------------------------------------------
-        //     let pt_flattened = flatten_2D(pt_qrnn_1.view())?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
-        //     let pt_dense_0 = plaintext_dense_block(
-        //         &pt_flattened,
-        //         &weights["DENSE_0/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         true
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // DENSE BLOCK 1 -------------------------------------------------------------------------------------------------------
-        //     let pt_dense_out = plaintext_dense_block(
-        //         &pt_dense_0.view(),
-        //         &weights["DENSE_OUT/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         false
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        // }
-
-        let pt_result = compute_softmax_then_argmax(&pt_dense_out.row(0).to_owned())?;
+        let pt_result = compute_softmax_then_argmax(&pt_dense_out)?;
+        let pt_top_5 = return_top_n(&pt_dense_out, 5)?;
         println!("Completed plaintext run.\n");
 
         println!("Encrypted SpeakerRec RNN result: {}", ct_result);
         println!("Plaintext SpeakerRec RNN result: {}", pt_result);
-        println!("True result:                {}\n", y[[i]]);
+        println!("True result:                     {}\n", y[[i]]);
+
+        println!("Plaintext Top 5 (decreasing):    {}", pt_top_5.to_string());
+        println!("Ciphertext Top 5 (decreasing):   {}\n", ct_top_5.to_string());
 
         // Metric calculations
-        if ct_result as i8 == y[[i]] {
+        if ct_result as i32 == y[[i]] {
             correct_preds += 1;
         }
-        if pt_result as i8 == y[[i]] {
+        if pt_result as i32 == y[[i]] {
             pt_correct_preds += 1;
         }
         println!("Correct CT predictions = {}", correct_preds);

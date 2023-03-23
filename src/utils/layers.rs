@@ -65,6 +65,39 @@ pub fn prepare_layer(
 }
 
 #[instrument]
+pub fn prepare_layer_mult(
+    log_p: i32,
+    log_q: i32,
+    units: usize,
+    config: &Parameters,
+    cuda_engine: &mut CudaEngine,
+    default_engine: &mut DefaultEngine,
+) -> Result<
+    (
+        CudaLweCiphertextVector64,
+        CudaLweCiphertextVector64,
+        CudaGlweCiphertextVector64,
+    ),
+    Box<dyn Error>,
+> {
+    // Create placeholder vector
+    let placeholder_pt_vector = default_engine.create_plaintext_vector_from(&vec![0u64; units])?;
+    let placeholder_ct_vector_output = default_engine.trivially_encrypt_lwe_ciphertext_vector(LweSize(config.N.0 + 1), &placeholder_pt_vector)?;
+    let placeholder_ct_vector_temp = default_engine.trivially_encrypt_lwe_ciphertext_vector(config.n.to_lwe_size(), &placeholder_pt_vector)?;
+    // IMPORTANT: We use N for output (after pbs n->N) and n for temp (after keyswitch N->n) since we do AP type 1 ^^^^^^
+
+    // Create device placeholders
+    let mut d_output = cuda_engine.convert_lwe_ciphertext_vector(&placeholder_ct_vector_output)?;
+    let mut d_temp = cuda_engine.convert_lwe_ciphertext_vector(&placeholder_ct_vector_temp)?;
+
+    // Create device luts
+    let h_luts = sign_mult_lut(log_p, log_q, d_output.lwe_ciphertext_count().0, &config, default_engine)?;
+    let mut d_luts = cuda_engine.convert_glwe_ciphertext_vector(&h_luts)?;
+
+    Ok((d_output, d_temp, d_luts))
+}
+
+#[instrument]
 pub fn encrypted_rnn_block(
     encrypted_input: &ArrayView2<LweCiphertext64>,
     pt_input: &ArrayView2<i32>, // For debugging
@@ -78,9 +111,10 @@ pub fn encrypted_rnn_block(
 ) -> Result<(Array2<LweCiphertext64>, Array2<i32>), Box<dyn Error>> // For debugging
 {
     let num_units = kernel.dim().1;
+    let num_ts = encrypted_input.dim().0;
     let (mut d_output, mut d_temp, d_luts) = prepare_layer(log_p, log_q, num_units, config, cuda_engine, default_engine)?;
-    let mut states: Array2<LweCiphertext64> = Array2::from_shape_vec((0, num_units), vec![])?;
-    let mut pt_states: Array2<i32> = Array2::from_shape_vec((0, num_units), vec![])?; // For debugging
+    let mut states: Array2<LweCiphertext64> = Array2::from_shape_vec((num_ts, num_units), vec![encrypted_input[[0,0]].clone(); num_ts*num_units])?;
+    let mut pt_states: Array2<i32> = Array2::from_shape_vec((num_ts, num_units), vec![0i32; num_ts*num_units])?; // For debugging
 
     // let encrypted_input = encrypt_lwe_array(pt_input, log_p, log_q, &h_keys.extracted, config, default_engine)?; // REFRESH CTXT FOR DEBUG
     // for (t, ct_t) in encrypted_input.rows().into_iter().enumerate() {
@@ -116,9 +150,8 @@ pub fn encrypted_rnn_block(
         // DEBUG
         check_pt_ct_difference(&output.view(), &pt_output.view(), format!("{}: ts {}: activation", layer_name, t).as_str(), false, log_p, log_q, h_keys, default_engine)?;
 
-        states.append(Axis(0), output.view().into_shape((1, num_units))?)?;
-        pt_states.append(Axis(0), pt_output.view().into_shape((1, num_units))?)?;
-        // For debugging
+        states.row_mut(t).assign(&output);
+        pt_states.row_mut(t).assign(&pt_output); // For debugging
     }
 
     // DEBUG
@@ -143,9 +176,10 @@ pub fn encrypted_dense_block(
 ) -> Result<(Array2<LweCiphertext64>, Array2<i32>), Box<dyn Error>> // For debuggin
 {
     let num_units = kernel.dim().1;
+    let num_ts = encrypted_input.dim().0;
     let (mut d_output, mut d_temp, d_luts) = prepare_layer(log_p, log_q, num_units, config, cuda_engine, default_engine)?;
-    let mut states: Array2<LweCiphertext64> = Array2::from_shape_vec((0, num_units), vec![])?;
-    let mut pt_states: Array2<i32> = Array2::from_shape_vec((0, num_units), vec![])?; // For debugging
+    let mut states: Array2<LweCiphertext64> = Array2::from_shape_vec((num_ts, num_units), vec![encrypted_input[[0,0]].clone(); num_ts*num_units])?;
+    let mut pt_states: Array2<i32> = Array2::from_shape_vec((num_ts, num_units), vec![0i32; num_ts*num_units])?; // For debugging
 
     // let encrypted_input = encrypt_lwe_array(pt_input, log_p, log_q, &h_keys.extracted, config, default_engine)?; // REFRESH CTXT FOR DEBUG
     // for (t, ct_t) in encrypted_input.rows().into_iter().enumerate() {
@@ -167,9 +201,8 @@ pub fn encrypted_dense_block(
                 // DEBUG
                 check_pt_ct_difference(&output.view(), &pt_output.view(), format!("{}: ts {}: activation", layer_name, t).as_str(), false, log_p, log_q, h_keys, default_engine)?; 
             }
-
-            states.append(Axis(0), output.view().into_shape((1, num_units))?)?;
-            pt_states.append(Axis(0), pt_output.view().into_shape((1, num_units))?)?; // For debugging
+            states.row_mut(t).assign(&output);
+            pt_states.row_mut(t).assign(&pt_output); // For debugging
         }
 
         // DEBUG
@@ -179,8 +212,8 @@ pub fn encrypted_dense_block(
         let mut output = matmul_custom_1D(&encrypted_input.row(0), kernel, num_accs, &config, default_engine)?;
         let mut pt_output = plaintext_matmul_custom_1D(&pt_input.row(0), kernel)?; // For debugging
         
-        pt_states.append(Axis(0), pt_output.view().into_shape((1, num_units))?)?; // For debugging
         states = output;
+        pt_states.row_mut(0).assign(&pt_output); // For debugging
     }
 
     // Ok(states)
@@ -250,6 +283,7 @@ pub fn plaintext_dense_block(
  * 
  * enc_input_2 is transposed first.
  */
+#[instrument]
 pub fn multiplication_layer(
     enc_input_1: &ArrayView2<LweCiphertext64>, // Inputs from rnn
     enc_input_2: &ArrayView2<LweCiphertext64>, // SA scores
@@ -266,17 +300,30 @@ pub fn multiplication_layer(
     let enc_input_2_t = enc_input_2.t();
     let pt_input_2_t = pt_input_2.t(); // Debug
     assert_eq!(enc_input_1.dim().0, enc_input_2_t.dim().1);
-
+    assert_eq!(pt_input_1.dim().0, pt_input_2_t.dim().1);
+    
     // Preparation steps
-    let ts = enc_input_1.dim().1;
-    let (mut d_output, mut d_temp, d_luts) = prepare_layer(log_p, log_q, ts, config, cuda_engine, default_engine)?;
-    let mut states: Array2<LweCiphertext64> = Array2::from_shape_vec((enc_input_2_t.dim().0, enc_input_1.dim().1), vec![])?;
-    let mut pt_states: Array2<i32> = Array2::from_shape_vec((enc_input_2_t.dim().0, enc_input_1.dim().1), vec![])?; // For debugging
+    let num_scores = enc_input_2_t.dim().0;
+    let ts = enc_input_1.dim().0;
+    let units = enc_input_1.dim().1;
+    let (mut d_output, mut d_temp, d_luts) = prepare_layer_mult(log_p, log_q, ts, config, cuda_engine, default_engine)?;
+    let mut states: Array2<LweCiphertext64> = Array2::from_shape_vec((num_scores, units), vec![enc_input_1[[0,0]].clone(); num_scores*units])?;
+    let mut pt_states: Array2<i32> = Array2::from_shape_vec((enc_input_2_t.dim().0, enc_input_1.dim().1), vec![0i32; num_scores*units])?; // For debugging
 
     // For each row in input_2_T, each column in input_1, perform dot product
-    
-    
-    Ok((enc_input_1.to_owned(), pt_input_1.to_owned()))
+    for (s, (ct_score, pt_score)) in enc_input_2_t.rows().into_iter().zip(pt_input_2_t.rows().into_iter()).enumerate().progress_count(enc_input_2_t.dim().0 as u64) {
+        for (c, (ct_inp, pt_inp)) in enc_input_1.columns().into_iter().zip(pt_input_1.columns().into_iter()).enumerate() {
+            // CT-CT dot product
+            states[[s, c]] = ct_dot_product(&ct_score, &ct_inp, &mut d_temp, &mut d_output, &d_luts, d_keys, cuda_engine, amortized_cuda_engine, default_engine)?;
+
+            // PT-PT dot product
+            pt_states[[s, c]] = pt_score.dot(&pt_inp);
+        }
+    }
+
+    // DEBUG
+    check_pt_ct_difference(&states.view(), &pt_states.view(), format!("{}: ct_ct_matmul", layer_name).as_str(), false, log_p, log_q, h_keys, default_engine)?; 
+    Ok((states, pt_states))
 }
 
 #[instrument]

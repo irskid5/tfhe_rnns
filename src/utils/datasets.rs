@@ -5,7 +5,7 @@
 #![allow(unused_imports)]
 
 use ndarray::{prelude::*, parallel::prelude::IntoParallelIterator};
-use npyz::{NpyFile, WriterBuilder, npz};
+use npyz::{NpyFile, WriterBuilder, npz, Deserialize};
 use indicatif::*;
 use rayon::prelude::*;
 
@@ -26,7 +26,7 @@ fn import_npz_into_vector(filename: &str) -> Result<Vec<Array2<i8>>, Box<dyn Err
     let num_samples = file.zip_archive().len();
     println!("Number of files in {} = {}", filename, num_samples);
 
-    let num_samples = 10;
+    let num_samples = 100;
 
     println!("Importing (parallel) from {}", filename);
     let empty_element = Array2::from_elem((2,2), 1 as i8);
@@ -48,16 +48,16 @@ fn import_npz_into_vector(filename: &str) -> Result<Vec<Array2<i8>>, Box<dyn Err
     Ok(output)
 }
 
-fn import_npy_into_array(filename: &str) -> Result<ndarray::ArrayD<i8>, Box<dyn Error>> {
+fn import_npy_into_array<T: Clone+Deserialize>(filename: &str) -> Result<ndarray::ArrayD<T>, Box<dyn Error>> {
     let bytes = std::fs::read(filename)?;
     let reader = npyz::NpyFile::new(&bytes[..])?;
     let shape = reader.shape().to_vec();
     let order = reader.order();
     // let dtype = reader.dtype();
     // println!("{}", dtype.descr());
-    let data: Vec<i8> = reader.into_vec::<i8>()?;
+    let data: Vec<T> = reader.into_vec::<T>()?;
 
-    Ok(to_array_d(data.clone(), shape.clone(), order))
+    Ok(to_array_d::<T>(data.clone(), shape.clone(), order))
 }
 
 // Example of parsing to an array with fixed NDIM.
@@ -112,9 +112,9 @@ pub fn import_mnist(mnist_config: &MNISTConfig) -> Result<(ndarray::ArrayD<i8>, 
     Ok((x, y))
 }
 
-pub fn import_voxceleb(voxceleb_config: &VoxCelebConfig) -> Result<(Vec<Array2<i8>>, ndarray::Array1<i8>), Box<dyn Error>> {
+pub fn import_voxceleb(voxceleb_config: &VoxCelebConfig) -> Result<(Vec<Array2<i8>>, ndarray::Array1<i32>), Box<dyn Error>> {
     let x: Vec<Array2<i8>> = import_npz_into_vector(&voxceleb_config.voxceleb_file)?;
-    let y: ndarray::ArrayD<i8> = import_npy_into_array(&voxceleb_config.voxceleb_labels_file)?;
+    let y: ndarray::ArrayD<i32> = import_npy_into_array::<i32>(&voxceleb_config.voxceleb_labels_file)?;
     let y = y.into_dimensionality::<Ix1>()?;
     // assert_eq!(dim, &(10000, 28, 28));
     // assert_eq!(img_data.order(), npyz::Order::C);

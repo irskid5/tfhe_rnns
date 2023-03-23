@@ -3,7 +3,6 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 #![allow(unused_imports)]
-#![feature(int_roundings)]
 
 use concrete_core::prelude::*;
 

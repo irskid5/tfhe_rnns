@@ -109,7 +109,7 @@ pub fn mnist_rnn(
 
     // Establish precision
     let log_q: i32 = 64;
-    let log_p: i32 = precision + 1;
+    let log_p: i32 = precision;
     let round_off: u64 = 1u64 << (log_q - log_p - 1);
 
     // Import dataset
