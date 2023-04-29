@@ -26,7 +26,7 @@ fn run_tests() -> Result<(), Box<dyn Error>> {
     // Tests
 
     // MULTI GPU, MULTI NUM CT TEST
-    let filename = String::from("benchmark_amortizedPBS_ gpus_2_nvidia2080Ti_cuda_12_1.csv");
+    let filename = String::from("benchmark_amortizedPBS_10_msmts_gpus_2_nvidia2080Ti_cuda_12_1.csv");
     print_test_banner!(benchmark_amortized_cuda,filename);
 
     // MULTI GPU, SINGLE NUM CT TEST
