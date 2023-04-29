@@ -172,7 +172,7 @@ pub fn amortized_cuda_bs_test(
     )?;
 
     // Create LUTs
-    let h_luts = sign_mult_lut(log_p, log_q, num_cts, &config, &mut default_engine)?;
+    let h_luts = identity_lut(log_p, log_q, num_cts, &config, &mut default_engine)?;
 
     // Send data to GPU (MULTIPLE CT)
     // send input to the GPU
@@ -212,12 +212,12 @@ pub fn amortized_cuda_bs_test(
         let h_result_pts = default_engine.decrypt_lwe_ciphertext_vector(&h_keys.extracted, &h_out_cts)?;
         let h_result_raw = default_engine.retrieve_plaintext_vector(&h_result_pts)?;
         let h_result: Vec<u64> = h_result_raw.iter().map(|x| (x + round_off) >> (log_q - log_p)).collect();
-        println!("Result raw: {:?}", &h_result[0..]);
+        // println!("Result raw: {:?}", &h_result[0..]);
 
         let correctness_vec: Vec<i64> = inputs_raw.iter().map(|x| sgn_zero_is_one(*x)).collect();
         let type_matching_result: Vec<i64> = h_result.iter().map(|x| iP_to_iT::<i64>(*x, log_p)).collect();
-        println!("Result:          {:?}", type_matching_result);
-        println!("Correctness Vec: {:?}", correctness_vec);
+        // println!("Result:          {:?}", type_matching_result);
+        // println!("Correctness Vec: {:?}", correctness_vec);
 
         // Calculate correctness
         let mut rights = 0;

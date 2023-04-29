@@ -26,7 +26,7 @@ fn import_npz_into_vector(filename: &str) -> Result<Vec<Array2<i8>>, Box<dyn Err
     let num_samples = file.zip_archive().len();
     println!("Number of files in {} = {}", filename, num_samples);
 
-    let num_samples = 100;
+    // let num_samples = 100;
 
     println!("Importing (parallel) from {}", filename);
     let empty_element = Array2::from_elem((2,2), 1 as i8);

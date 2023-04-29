@@ -35,7 +35,7 @@ fn run_tests() -> Result<(), Box<dyn Error>> {
     // }
 
     // MULTI GPU, SINGLE NUM CT TEST
-    // print_test_banner!(amortized_cuda_bs_test, false, 2, 1, 6, &*SET8);
+    print_test_banner!(amortized_cuda_bs_test, true, 32000, 1, 6, &*SET8);
 
     // print_test_banner!(fft_bootstrap_woppbs_test,);
 
@@ -66,7 +66,7 @@ fn run_mnist_rnn() -> Result<(), Box<dyn Error>> {
 fn run_speaker_rec_rnn() -> Result<(), Box<dyn Error>> {
     println!("");
     println!("{}", "Beginning SpeakerRec RNN run.".bold());
-    print_rnn_banner!(speaker_rec_rnn, false, false, &*SET8, 10);
+    // print_rnn_banner!(speaker_rec_rnn, false, false, &*SET8, 11);
     Ok(())
 }
 

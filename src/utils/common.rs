@@ -73,7 +73,7 @@ pub fn decrypt_lwe<T: Integer + NumCast>(
     let round_off = 1u64 << (log_q - log_p - 1);
     let pt = default_engine.decrypt_lwe_ciphertext(key, input)?;
     let raw = default_engine.retrieve_plaintext(&pt)?;
-    let res = (raw + round_off) >> (log_q - log_p);
+    let res = (raw.wrapping_add(round_off)) >> (log_q - log_p);
     let res = T::from(res).unwrap();
     Ok(res)
 }
@@ -313,23 +313,30 @@ pub fn ct_dot_product(
     input_2: &ArrayView1<LweCiphertext64>,
     d_temp: &mut CudaLweCiphertextVector64, // Can be persistant (per layer or per equal sized array)
     d_output: &mut CudaLweCiphertextVector64,
+    n: usize, // scaling factor for correction
     d_mult_luts: &CudaGlweCiphertextVector64, // Can be persistant (per layer or per equal sized array)
     d_keys: &CudaKeys,
     cuda_engine: &mut CudaEngine,
     amortized_cuda_engine: &mut AmortizedCudaEngine,
     default_engine: &mut DefaultEngine,
 ) -> Result<LweCiphertext64, Box<dyn Error>> {
-    // Input vector = (input_1 - input_2)
-    //
-    //  a, b | a*b | a-b | LUT(a-b)
-    //  1, 1 |  1  |  0  |  1       
-    //  1,-1 | -1  |  2  | -1      
-    // -1, 1 | -1  | -2  | -1       
-    // -1,-1 |  1  |  0  |  1      
+    // Input vector = n*(input_1 - input_2)
+    // Truth Table:
+    //  a, b | a*b | a-b | n(a-b) | LUT(n(a-b))
+    //  1, 1 |  1  |  0  |    0   |  1       
+    //  1,-1 | -1  |  2  |   n*2  | -1      
+    // -1, 1 | -1  | -2  | n*(-2) | -1       
+    // -1,-1 |  1  |  0  |    0   |  1      
     let input_vec_1 = populate_lwe_vector(input_1.to_owned(), default_engine)?;
     let input_vec_2 = populate_lwe_vector(input_2.to_owned(), default_engine)?;
     let mut input_vec = input_vec_1.clone();
     default_engine.discard_sub_lwe_ciphertext_vector(&mut input_vec, &input_vec_1, &input_vec_2)?; // a-b
+    let copy = input_vec.clone();
+    // Multiplication by n
+    for i in 0..n {
+        default_engine.fuse_add_lwe_ciphertext_vector(&mut input_vec, &copy)?;
+    }
+    // Now we have n*(a-b)
     let d_input_vec = cuda_engine.convert_lwe_ciphertext_vector(&input_vec)?;
 
     // Perform lut evaluation
@@ -419,6 +426,12 @@ pub fn check_pt_pt_difference<T1: Integer + NumCast + Clone, T2: Integer + NumCa
         "[{}]: Number of different elements = {}, percentage {:.2}%, mae_pt_ct = {:.2}",
         check_msg, num_dif_ele, dif_ele_percent, mae_pt_ct,
     );
+
+    // For printing out in csv style
+    // println!(
+    //     "{},{},{:.2}",
+    //     num_dif_ele, dif_ele_percent, mae_pt_ct,
+    // );
 
     Ok((dif_ele_percent, mae_pt_ct))
 }

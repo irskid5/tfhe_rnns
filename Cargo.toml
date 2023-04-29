@@ -9,7 +9,10 @@ edition = "2021"
 # concrete = { version = "0.2.0-beta", features = [ "booleans", "shortints", "integers", "serde"] }
 # concrete-core = {version = "1.0.2", features=["x86_64-cuda"]}
 # concrete-core = {git = "https://github.com/zama-ai/concrete-core.git", rev="f81ecd4", features=["x86_64-cuda"]} # WORKS
-concrete-core = {git = "https://github.com/zama-ai/concrete-core.git", features=["x86_64-cuda"]} # DOES NOT WORK
+# concrete-core = {git = "https://github.com/zama-ai/concrete-core.git", rev="c59f40f", features=["x86_64-cuda"]} # DOES NOT WORK
+# concrete-core = { path="concrete-core/concrete-core", features=["x86_64-cuda"] }
+concrete-core = {git = "https://github.com/irskid5/concrete-core.git", features=["x86_64-cuda"]} # DOES NOT WORK
+
 # 
 # concrete-core = {path = "concrete-core/concrete-core", features=["x86_64-cuda"]}
 

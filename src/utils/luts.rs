@@ -19,8 +19,9 @@ pub fn sign_lut(
 ) -> Result<GlweCiphertextVector64, Box<dyn Error>> 
 {
     // Create raw sign lut
-    // chunk_size = N/(P/2) for P/2 elements
-    let start = config.N.0 - (config.N.0 >> log_p);
+    let chunk_size = config.N.0 >> (log_p-1); // chunk_size = N/(P/2) for P elements since sign is negacyclic
+    let half_chunk_size = chunk_size >> 1;
+    let start = config.N.0 - half_chunk_size;
     let mut luts: Vec<u64> = vec![];
     for i in 0..num_cts {
         let mut sign_lut = vec![1u64 << (log_q - log_p); config.N.0]; // Create all ones
@@ -52,7 +53,7 @@ pub fn identity_lut(
 {
     // if fn is not negacyclic, you encode all 2^log_p elements)
     // for identity lut, fn is not negacyclic.
-    let chunk_size = config.N.0 >> log_p; // chunk_size = N/P for P elements
+    let chunk_size = config.N.0 >> (log_p-1); // chunk_size = N/P for P elements
     let half_chunk_size = chunk_size >> 1;
     let end = config.N.0 - half_chunk_size;
     let mut luts: Vec<u64> = vec![];
@@ -128,14 +129,15 @@ pub fn sign_mult_lut(
     // if fn is not negacyclic, you encode all 2^log_p elements)
     let chunk_size = config.N.0 >> (log_p - 1);
     let half_chunk_size = chunk_size >> 1;
-    let end = config.N.0 - chunk_size;
+    let start = config.N.0/4;
+    let end = config.N.0 - start;
     let mut luts: Vec<u64> = vec![];
     for i in 0..num_cts {
-        let mut identity_lut = vec![1u64 << (log_q - log_p); config.N.0]; // Create all zeros
+        let mut identity_lut = vec![1u64 << (log_q - log_p); config.N.0]; // Create all ones
         // for j in 0..chunk_size {
         //     identity_lut[i] = 1u64 << (log_q - log_p);
         // }
-        for j in chunk_size..(config.N.0 >> 1) {
+        for j in start..(config.N.0 >> 1) {
             identity_lut[j] = u64::MAX << (log_q - log_p); // -1
         }
         // for j in (config.N.0 >> 1)..end {

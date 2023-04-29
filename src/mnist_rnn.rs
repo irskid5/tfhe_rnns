@@ -10,7 +10,7 @@ use ndarray::*;
 use time_graph::{instrument, spanned};
 
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use std::error::Error;
 
@@ -135,208 +135,233 @@ pub fn mnist_rnn(
     // Loop through dataset (one epoch)
     let mut correct_preds = 0;
     let mut pt_correct_preds = 0;
+    let mut correct_top5_preds = 0;
+    let mut pt_correct_top5_preds = 0;
     let mut dense_out_dif_percent: Vec<f32> = vec![];
     let mut dense_out_mae: Vec<f32> = vec![];
     let dense_out_num_accs = 4;
     let num_test_images = 100;
     for (i, img) in x.axis_iter(ndarray::Axis(0)).enumerate() {
-        
-        // Stopping condition
-        if i == num_test_images {
-            break;
-        }
+        spanned!("encrypted_run", {
+            let start = Instant::now();
 
-        println!("Running sample {} ------------------------------------------------------------------", i+1);
+            // Stopping condition
+            // if i == num_test_images {
+            //     break;
+            // }
 
-        // Encrypt inputs
-        let pt = img.clone().to_owned().mapv(|x| x as i32);
-        let ct = encrypt_lwe_array(&img, log_p, log_q, &h_keys.extracted, &config, &mut default_engine)?;
+            println!("Running sample {} ------------------------------------------------------------------", i+1);
 
-        // -------------------------- START ENCRYPTED FWD STEP ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+            // Encrypt inputs
+            let pt = img.clone().to_owned().mapv(|x| x as i32);
+            let ct = encrypt_lwe_array(&img, log_p, log_q, &h_keys.extracted, &config, &mut default_engine)?;
 
-        println!("Beginning encrypted run.");
+            // -------------------------- START ENCRYPTED FWD STEP ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-        // RNN BLOCK 0 --------------------------------------------------------------------------------------------------------
-        let (qrnn_0, pt_qrnn_0) = spanned!("qrnn_0", {
-            encrypted_rnn_block(
-                &ct.view(),
-                &pt.view(),
-                &weights["QRNN_0/quantized_kernel:0"].view(),
-                &weights["QRNN_0/quantized_recurrent_kernel:0"].view(),
-                "QRNN_0",
-                log_p, log_q,
-                &d_keys,&h_keys, config,
-                &mut cuda_engine,&mut amortized_cuda_engine,&mut default_engine,
-            )?
+            println!("Beginning encrypted run.");
+
+            // RNN BLOCK 0 --------------------------------------------------------------------------------------------------------
+            let (qrnn_0, pt_qrnn_0) = spanned!("qrnn_0", {
+                encrypted_rnn_block(
+                    &ct.view(),
+                    &pt.view(),
+                    &weights["QRNN_0/quantized_kernel:0"].view(),
+                    &weights["QRNN_0/quantized_recurrent_kernel:0"].view(),
+                    "QRNN_0",
+                    log_p, log_q,
+                    &d_keys,&h_keys, config,
+                    &mut cuda_engine,&mut amortized_cuda_engine,&mut default_engine,
+                )?
+            });
+            // println!("Finished encrypted QRNN_0.");
+            // ---------------------------------------------------------------------------------------------------------------------
+
+            // TIME REDUCTION LAYER ------------------------------------------------------------------------------------------------
+            let tr = time_reduction(qrnn_0.view())?;
+            let pt_tr = time_reduction(pt_qrnn_0.view())?;
+            // println!("Finished encrypted TR.");
+            // ---------------------------------------------------------------------------------------------------------------------
+
+            // RNN BLOCK 1 ---------------------------------------------------------------------------------------------------------
+            let (qrnn_1, pt_qrnn_1) = spanned!("qrnn_1", {
+                encrypted_rnn_block(
+                    &tr,
+                    &pt_tr,
+                    &weights["QRNN_1/quantized_kernel:0"].view(),
+                    &weights["QRNN_1/quantized_recurrent_kernel:0"].view(),
+                    "QRNN_1",
+                    log_p, log_q,
+                    &d_keys, &h_keys, config,
+                    &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
+                )?
+            });
+            // println!("Finished encrypted QRNN_1.");
+            // ---------------------------------------------------------------------------------------------------------------------
+
+            // FLATTEN -------------------------------------------------------------------------------------------------------------
+            let flattened = flatten_2D(qrnn_1.view())?;
+            let pt_flattened = flatten_2D(pt_qrnn_1.view())?;
+            // println!("Finished encrypted FLATTEN.");
+            // ---------------------------------------------------------------------------------------------------------------------
+
+            // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
+            let (dense_0, pt_dense_0) = spanned!("dense_0", {
+                encrypted_dense_block(
+                    &flattened,
+                    &pt_flattened,
+                    &weights["DENSE_0/quantized_kernel:0"].view(),
+                    "DENSE_0",
+                    true,
+                    1,
+                    log_p, log_q,
+                    &d_keys, &h_keys, config,
+                    &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
+                )?
+            });
+            // println!("Finished encrypted DENSE_0.");
+            // ---------------------------------------------------------------------------------------------------------------------
+
+            // DENSE BLOCK 1 -------------------------------------------------------------------------------------------------------
+            let (dense_out, pt_dense_out) = spanned!("dense_out", {
+                encrypted_dense_block(
+                    &dense_0.view(),
+                    &pt_dense_0.view(),
+                    &weights["DENSE_OUT/quantized_kernel:0"].view(),
+                    "DENSE_OUT",
+                    false,
+                    dense_out_num_accs,
+                    log_p, log_q,
+                    &d_keys, &h_keys, config,
+                    &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
+                )?
+            });
+            // check_pt_ct_difference(&dense_out.view(), &pt_dense_out.view(), format!("{}: output", "DENSE_OUT").as_str(), false, log_p, log_q, &h_keys, &mut default_engine)?;
+            // println!("Finished encrypted DENSE_OUT.");
+            // ---------------------------------------------------------------------------------------------------------------------
+
+            // Decrypt, convert to signed
+            let mut ct_logits: Array2<u64> = decrypt_lwe_array(
+                &dense_out.view(),
+                log_p,
+                log_q,
+                &h_keys.extracted,
+                &mut default_engine,
+            )?;
+            let mut ct_logits = ct_logits.mapv(|x| iP_to_iT::<i32>(x, log_p));
+            let mut ct_logits = ct_logits.sum_axis(Axis(0));
+            let pt_dense_out = pt_dense_out.into_shape(ct_logits.dim())?;
+
+            // Calculate some stats
+            let dense_out_stats = check_pt_pt_difference(&ct_logits.view(), &pt_dense_out.view(), format!("{}: output", "DENSE_OUT").as_str(), false)?;
+            dense_out_dif_percent.push(dense_out_stats.0);
+            dense_out_mae.push(dense_out_stats.1);
+
+            // Get result
+            let ct_result = compute_softmax_then_argmax(&ct_logits)?;
+            let ct_top_5 = return_top_n(&ct_logits, 5)?;
+            println!("Completed encrypted run.");
+
+            
+
+            // -------------------------- END ENCRYPTED FWD STEP ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+            // ======================================================================================================================================================================================================================================
+            // ======================================================================================================================================================================================================================================
+            // ======================================================================================================================================================================================================================================
+
+            // -------------------------- BEGIN PLAINTEXT FWD STEP ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+            // {
+
+            //     println!("Beginning plaintext run.");
+
+            //     // RNN BLOCK 0 --------------------------------------------------------------------------------------------------------
+            //     let pt_qrnn_0 = plaintext_rnn_block(
+            //         &pt.view(),
+            //         &weights["QRNN_0/quantized_kernel:0"].mapv(|x| x as i32).view(),
+            //         &weights["QRNN_0/quantized_recurrent_kernel:0"].mapv(|x| x as i32).view()
+            //     )?;
+            //     // ---------------------------------------------------------------------------------------------------------------------
+
+            //     // TIME REDUCTION LAYER ------------------------------------------------------------------------------------------------
+            //     let pt_tr = time_reduction(pt_qrnn_0.view())?;
+            //     // ---------------------------------------------------------------------------------------------------------------------
+
+            //     // RNN BLOCK 1 ---------------------------------------------------------------------------------------------------------
+            //     let pt_qrnn_1 = plaintext_rnn_block(
+            //         &pt_tr,
+            //         &weights["QRNN_1/quantized_kernel:0"].mapv(|x| x as i32).view(),
+            //         &weights["QRNN_1/quantized_recurrent_kernel:0"].mapv(|x| x as i32).view()
+            //     )?;
+            //     // ---------------------------------------------------------------------------------------------------------------------
+
+            //     // FLATTEN -------------------------------------------------------------------------------------------------------------
+            //     let pt_flattened = flatten_2D(pt_qrnn_1.view())?;
+            //     // ---------------------------------------------------------------------------------------------------------------------
+
+            //     // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
+            //     let pt_dense_0 = plaintext_dense_block(
+            //         &pt_flattened,
+            //         &weights["DENSE_0/quantized_kernel:0"].mapv(|x| x as i32).view(),
+            //         true
+            //     )?;
+            //     // ---------------------------------------------------------------------------------------------------------------------
+
+            //     // DENSE BLOCK 1 -------------------------------------------------------------------------------------------------------
+            //     let pt_dense_out = plaintext_dense_block(
+            //         &pt_dense_0.view(),
+            //         &weights["DENSE_OUT/quantized_kernel:0"].mapv(|x| x as i32).view(),
+            //         false
+            //     )?;
+            //     // ---------------------------------------------------------------------------------------------------------------------
+
+            // }
+
+            let pt_result = compute_softmax_then_argmax(&pt_dense_out)?;
+            let pt_top_5 = return_top_n(&pt_dense_out, 5)?;
+            println!("Completed plaintext run.\n");
+
+            println!("Encrypted MNIST RNN result: {}", ct_result);
+            println!("Plaintext MNIST RNN result: {}", pt_result);
+            println!("True result:                {}\n", y[[i]]);
+
+            println!("Plaintext Top 5 (decreasing):    {}", pt_top_5.to_string());
+            println!("Ciphertext Top 5 (decreasing):   {}\n", ct_top_5.to_string());
+
+            // Metric calculations
+            if ct_result as i8 == y[[i]] {
+                correct_preds += 1;
+            }
+            if pt_result as i8 == y[[i]] {
+                pt_correct_preds += 1;
+            }
+            if ct_top_5.to_vec().contains(&(y[[i]] as usize)) {
+                correct_top5_preds += 1;
+            }
+            if pt_top_5.to_vec().contains(&(y[[i]] as usize)) {
+                pt_correct_top5_preds += 1;
+            }
+            println!("Correct CT predictions = {}", correct_preds);
+            println!("Correct PT predictions = {}\n", pt_correct_preds);
+            println!("CT in top5 count       = {}", correct_top5_preds);
+            println!("PT in top5 count       = {}\n", pt_correct_top5_preds);
+
+            let duration = start.elapsed();
+            println!("Time elapsed: {:.4} s\n", duration.as_millis() as f32 / 1000f32);
         });
-        // println!("Finished encrypted QRNN_0.");
-        // ---------------------------------------------------------------------------------------------------------------------
-
-        // TIME REDUCTION LAYER ------------------------------------------------------------------------------------------------
-        let tr = time_reduction(qrnn_0.view())?;
-        let pt_tr = time_reduction(pt_qrnn_0.view())?;
-        // println!("Finished encrypted TR.");
-        // ---------------------------------------------------------------------------------------------------------------------
-
-        // RNN BLOCK 1 ---------------------------------------------------------------------------------------------------------
-        let (qrnn_1, pt_qrnn_1) = spanned!("qrnn_1", {
-            encrypted_rnn_block(
-                &tr,
-                &pt_tr,
-                &weights["QRNN_1/quantized_kernel:0"].view(),
-                &weights["QRNN_1/quantized_recurrent_kernel:0"].view(),
-                "QRNN_1",
-                log_p, log_q,
-                &d_keys, &h_keys, config,
-                &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
-            )?
-        });
-        // println!("Finished encrypted QRNN_1.");
-        // ---------------------------------------------------------------------------------------------------------------------
-
-        // FLATTEN -------------------------------------------------------------------------------------------------------------
-        let flattened = flatten_2D(qrnn_1.view())?;
-        let pt_flattened = flatten_2D(pt_qrnn_1.view())?;
-        // println!("Finished encrypted FLATTEN.");
-        // ---------------------------------------------------------------------------------------------------------------------
-
-        // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
-        let (dense_0, pt_dense_0) = spanned!("dense_0", {
-            encrypted_dense_block(
-                &flattened,
-                &pt_flattened,
-                &weights["DENSE_0/quantized_kernel:0"].view(),
-                "DENSE_0",
-                true,
-                1,
-                log_p, log_q,
-                &d_keys, &h_keys, config,
-                &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
-            )?
-        });
-        // println!("Finished encrypted DENSE_0.");
-        // ---------------------------------------------------------------------------------------------------------------------
-
-        // DENSE BLOCK 1 -------------------------------------------------------------------------------------------------------
-        let (dense_out, pt_dense_out) = spanned!("dense_out", {
-            encrypted_dense_block(
-                &dense_0.view(),
-                &pt_dense_0.view(),
-                &weights["DENSE_OUT/quantized_kernel:0"].view(),
-                "DENSE_OUT",
-                false,
-                dense_out_num_accs,
-                log_p, log_q,
-                &d_keys, &h_keys, config,
-                &mut cuda_engine, &mut amortized_cuda_engine, &mut default_engine,
-            )?
-        });
-        // check_pt_ct_difference(&dense_out.view(), &pt_dense_out.view(), format!("{}: output", "DENSE_OUT").as_str(), false, log_p, log_q, &h_keys, &mut default_engine)?;
-        // println!("Finished encrypted DENSE_OUT.");
-        // ---------------------------------------------------------------------------------------------------------------------
-
-        // Decrypt, convert to signed
-        let mut ct_logits: Array2<u64> = decrypt_lwe_array(
-            &dense_out.view(),
-            log_p,
-            log_q,
-            &h_keys.extracted,
-            &mut default_engine,
-        )?;
-        let mut ct_logits = ct_logits.mapv(|x| iP_to_iT::<i32>(x, log_p));
-        let mut ct_logits = ct_logits.sum_axis(Axis(0));
-        let pt_dense_out = pt_dense_out.into_shape(ct_logits.dim())?;
-
-        // Calculate some stats
-        let dense_out_stats = check_pt_pt_difference(&ct_logits.view(), &pt_dense_out.view(), format!("{}: output", "DENSE_OUT").as_str(), false)?;
-        dense_out_dif_percent.push(dense_out_stats.0);
-        dense_out_mae.push(dense_out_stats.1);
-
-        // Get result
-        let ct_result = compute_softmax_then_argmax(&ct_logits)?;
-        println!("Completed encrypted run.");
-
-        
-
-        // -------------------------- END ENCRYPTED FWD STEP ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-        // ======================================================================================================================================================================================================================================
-        // ======================================================================================================================================================================================================================================
-        // ======================================================================================================================================================================================================================================
-
-        // -------------------------- BEGIN PLAINTEXT FWD STEP ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-        // {
-
-        //     println!("Beginning plaintext run.");
-
-        //     // RNN BLOCK 0 --------------------------------------------------------------------------------------------------------
-        //     let pt_qrnn_0 = plaintext_rnn_block(
-        //         &pt.view(),
-        //         &weights["QRNN_0/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         &weights["QRNN_0/quantized_recurrent_kernel:0"].mapv(|x| x as i32).view()
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // TIME REDUCTION LAYER ------------------------------------------------------------------------------------------------
-        //     let pt_tr = time_reduction(pt_qrnn_0.view())?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // RNN BLOCK 1 ---------------------------------------------------------------------------------------------------------
-        //     let pt_qrnn_1 = plaintext_rnn_block(
-        //         &pt_tr,
-        //         &weights["QRNN_1/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         &weights["QRNN_1/quantized_recurrent_kernel:0"].mapv(|x| x as i32).view()
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // FLATTEN -------------------------------------------------------------------------------------------------------------
-        //     let pt_flattened = flatten_2D(pt_qrnn_1.view())?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // DENSE BLOCK 0 -------------------------------------------------------------------------------------------------------
-        //     let pt_dense_0 = plaintext_dense_block(
-        //         &pt_flattened,
-        //         &weights["DENSE_0/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         true
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        //     // DENSE BLOCK 1 -------------------------------------------------------------------------------------------------------
-        //     let pt_dense_out = plaintext_dense_block(
-        //         &pt_dense_0.view(),
-        //         &weights["DENSE_OUT/quantized_kernel:0"].mapv(|x| x as i32).view(),
-        //         false
-        //     )?;
-        //     // ---------------------------------------------------------------------------------------------------------------------
-
-        // }
-
-        let pt_result = compute_softmax_then_argmax(&pt_dense_out)?;
-        println!("Completed plaintext run.\n");
-
-        println!("Encrypted MNIST RNN result: {}", ct_result);
-        println!("Plaintext MNIST RNN result: {}", pt_result);
-        println!("True result:                {}\n", y[[i]]);
-
-        // Metric calculations
-        if ct_result as i8 == y[[i]] {
-            correct_preds += 1;
-        }
-        if pt_result as i8 == y[[i]] {
-            pt_correct_preds += 1;
-        }
-        println!("Correct CT predictions = {}", correct_preds);
-        println!("Correct PT predictions = {}\n", pt_correct_preds);
     }
 
     // Stat calculations
     let acc = 100_f32 * correct_preds as f32 / num_test_images as f32;
     let pt_acc = 100_f32 * pt_correct_preds as f32 / num_test_images as f32;
+    let top5_acc = 100_f32 * correct_top5_preds as f32 / num_test_images as f32;
+    let pt_top5_acc = 100_f32 * pt_correct_top5_preds as f32 / num_test_images as f32;
     println!("\nCompleted {} predictions!", num_test_images);
     println!("\nAccuracy Statistics...");
     println!("CT Accuracy = {:.2}%", acc);
     println!("PT Accuracy = {:.2}%", pt_acc);
+    println!("CT Top-5 Accuracy = {:.2}%", top5_acc);
+    println!("PT Top-5 Accuracy = {:.2}%", pt_top5_acc);
 
     let dense_out_dif_percent = arr1(&dense_out_dif_percent);
     let dense_out_mae = arr1(&dense_out_mae);

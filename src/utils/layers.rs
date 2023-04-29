@@ -148,15 +148,16 @@ pub fn encrypted_rnn_block(
         pt_output = pt_output.mapv(|x| sgn_with_mod(x, log_p-1)); // For debugging
 
         // DEBUG
-        check_pt_ct_difference(&output.view(), &pt_output.view(), format!("{}: ts {}: activation", layer_name, t).as_str(), false, log_p, log_q, h_keys, default_engine)?;
+        // check_pt_ct_difference(&output.view(), &pt_output.view(), format!("{}: ts {}: activation", layer_name, t).as_str(), false, log_p, log_q, h_keys, default_engine)?;
 
         states.row_mut(t).assign(&output);
         pt_states.row_mut(t).assign(&pt_output); // For debugging
     }
 
     // DEBUG
+    // println!("\nDone {}", layer_name);
     check_pt_ct_difference(&states.view(), &pt_states.view(), format!("{}: output", layer_name).as_str(), false, log_p, log_q, h_keys, default_engine)?;
-
+    // println!("Done {}\n", layer_name);
     // Ok(states)
     Ok((states, pt_states)) // For debugging
 }
@@ -199,14 +200,16 @@ pub fn encrypted_dense_block(
                 pt_output = pt_output.mapv(|x| sgn_with_mod(x, log_p-1)); // For debugging
 
                 // DEBUG
-                check_pt_ct_difference(&output.view(), &pt_output.view(), format!("{}: ts {}: activation", layer_name, t).as_str(), false, log_p, log_q, h_keys, default_engine)?; 
+                // check_pt_ct_difference(&output.view(), &pt_output.view(), format!("{}: ts {}: activation", layer_name, t).as_str(), false, log_p, log_q, h_keys, default_engine)?; 
             }
             states.row_mut(t).assign(&output);
             pt_states.row_mut(t).assign(&pt_output); // For debugging
         }
 
         // DEBUG
+        // println!("\nDone {}", layer_name);
         check_pt_ct_difference(&states.view(), &pt_states.view(), format!("{}: output", layer_name).as_str(), false, log_p, log_q, h_keys, default_engine)?;
+        // println!("Done {}\n", layer_name);
     } else {
         // Very hacky
         let mut output = matmul_custom_1D(&encrypted_input.row(0), kernel, num_accs, &config, default_engine)?;
@@ -290,11 +293,14 @@ pub fn multiplication_layer(
     pt_input_1: &ArrayView2<i32>, // For debugging
     pt_input_2: &ArrayView2<i32>, // For debugging
     layer_name: &str,
-    log_p: i32, log_q: i32,
+    log_p: i32, log_q: i32, output_log_p: i32,
     d_keys: &CudaKeys, h_keys: &Keys, config: &Parameters,
     cuda_engine: &mut CudaEngine, amortized_cuda_engine: &mut AmortizedCudaEngine, default_engine: &mut DefaultEngine,
 ) -> Result<(Array2<LweCiphertext64>, Array2<i32>), Box<dyn Error>> {
     
+    // let enc_input_1 = encrypt_lwe_array(pt_input_1, log_p, log_q, &h_keys.extracted, config, default_engine)?; // REFRESH CTXT FOR DEBUG
+    // let enc_input_2 = encrypt_lwe_array(pt_input_2, log_p, log_q, &h_keys.extracted, config, default_engine)?; // REFRESH CTXT FOR DEBUG
+
     // Transpose the scores (enc_input_2_t: shape = 4 x ts, enc_input_1: shape = ts x units)
     // Therefore, output: shape = 4 x ts x ts x units = 4 x units
     let enc_input_2_t = enc_input_2.t();
@@ -306,7 +312,9 @@ pub fn multiplication_layer(
     let num_scores = enc_input_2_t.dim().0;
     let ts = enc_input_1.dim().0;
     let units = enc_input_1.dim().1;
-    let (mut d_output, mut d_temp, d_luts) = prepare_layer_mult(log_p, log_q, ts, config, cuda_engine, default_engine)?;
+    let (mut d_output, mut d_temp, d_luts) = prepare_layer_mult(output_log_p, log_q, ts, config, cuda_engine, default_engine)?;
+    let n = 3 * (1 << (log_p-5)) as usize;
+    
     let mut states: Array2<LweCiphertext64> = Array2::from_shape_vec((num_scores, units), vec![enc_input_1[[0,0]].clone(); num_scores*units])?;
     let mut pt_states: Array2<i32> = Array2::from_shape_vec((enc_input_2_t.dim().0, enc_input_1.dim().1), vec![0i32; num_scores*units])?; // For debugging
 
@@ -314,7 +322,7 @@ pub fn multiplication_layer(
     for (s, (ct_score, pt_score)) in enc_input_2_t.rows().into_iter().zip(pt_input_2_t.rows().into_iter()).enumerate().progress_count(enc_input_2_t.dim().0 as u64) {
         for (c, (ct_inp, pt_inp)) in enc_input_1.columns().into_iter().zip(pt_input_1.columns().into_iter()).enumerate() {
             // CT-CT dot product
-            states[[s, c]] = ct_dot_product(&ct_score, &ct_inp, &mut d_temp, &mut d_output, &d_luts, d_keys, cuda_engine, amortized_cuda_engine, default_engine)?;
+            states[[s, c]] = ct_dot_product(&ct_score, &ct_inp, &mut d_temp, &mut d_output, n, &d_luts, d_keys, cuda_engine, amortized_cuda_engine, default_engine)?;
 
             // PT-PT dot product
             pt_states[[s, c]] = pt_score.dot(&pt_inp);
@@ -322,7 +330,9 @@ pub fn multiplication_layer(
     }
 
     // DEBUG
-    check_pt_ct_difference(&states.view(), &pt_states.view(), format!("{}: ct_ct_matmul", layer_name).as_str(), false, log_p, log_q, h_keys, default_engine)?; 
+    // println!("\nDone {}", layer_name);
+    // check_pt_ct_difference(&states.view(), &pt_states.view(), format!("{}: ct_ct_matmul", layer_name).as_str(), false, output_log_p, log_q, h_keys, default_engine)?; 
+    // println!("Done {}\n", layer_name);
     Ok((states, pt_states))
 }
 
