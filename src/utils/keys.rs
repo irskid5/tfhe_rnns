@@ -25,9 +25,10 @@ pub struct Parameters {
     pub Bg_bit_pbs: DecompositionBaseLog,
     pub l_ks: DecompositionLevelCount,
     pub base_bit_ks: DecompositionBaseLog,
+    pub set_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Keys {
     pub lwe: LweSecretKey64,
     pub glwe: GlweSecretKey64,
@@ -56,6 +57,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(16),
         l_ks: DecompositionLevelCount(5),
         base_bit_ks: DecompositionBaseLog(4),
+        set_id: 1.to_string()
     }; // POTENTIALLY UNSAFE, USE FOR TESTING (λ might be less than 128)
 
     // SAFE PARAMETERS (λ >= 128)
@@ -69,6 +71,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(2),
         l_ks: DecompositionLevelCount(3),
         base_bit_ks: DecompositionBaseLog(5),
+        set_id: 2.to_string()
     };
 
     pub static ref SET3: Parameters = Parameters {
@@ -81,6 +84,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(4),
         l_ks: DecompositionLevelCount(2),
         base_bit_ks: DecompositionBaseLog(8),
+        set_id: 3.to_string()
     };
 
     pub static ref SET4: Parameters = Parameters {
@@ -93,6 +97,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(14),
         l_ks: DecompositionLevelCount(2),
         base_bit_ks: DecompositionBaseLog(8),
+        set_id: 4.to_string()
     };
 
     pub static ref SET5: Parameters = Parameters {
@@ -105,6 +110,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(2),
         l_ks: DecompositionLevelCount(3),
         base_bit_ks: DecompositionBaseLog(5),
+        set_id: 5.to_string()
     };
 
     pub static ref SET6: Parameters = Parameters {
@@ -117,6 +123,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(3),
         l_ks: DecompositionLevelCount(3),
         base_bit_ks: DecompositionBaseLog(5),
+        set_id: 6.to_string()
     };
 
     pub static ref SET7: Parameters = Parameters {
@@ -129,6 +136,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(5),
         l_ks: DecompositionLevelCount(2),
         base_bit_ks: DecompositionBaseLog(7),
+        set_id: 7.to_string()
     };
 
     pub static ref SET8: Parameters = Parameters {
@@ -141,6 +149,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(14),
         l_ks: DecompositionLevelCount(2),
         base_bit_ks: DecompositionBaseLog(8),
+        set_id: 8.to_string()
     };
 
     pub static ref SET9: Parameters = Parameters {
@@ -153,6 +162,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(8),
         l_ks: DecompositionLevelCount(2),
         base_bit_ks: DecompositionBaseLog(8),
+        set_id: 9.to_string()
     };
 
     pub static ref SET10: Parameters = Parameters {
@@ -165,6 +175,7 @@ lazy_static! {
         Bg_bit_pbs: DecompositionBaseLog(5),
         l_ks: DecompositionLevelCount(2),
         base_bit_ks: DecompositionBaseLog(8),
+        set_id: 10.to_string()
     };
 }
 

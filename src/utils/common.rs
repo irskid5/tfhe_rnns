@@ -477,3 +477,11 @@ pub fn iP_to_iT<T: SignedInteger + NumCast>(value: u64, p: i32) -> T {
         return T::from(value).unwrap();
     }
 }
+
+// Returns a vector of num_elements random i32s in a range between low and high
+pub fn random_int64_vector(low: i64, high: i64, num_elements: usize) -> Vec<i64> {
+    use rand::{distributions::Uniform, Rng};
+    let mut rng = rand::thread_rng();
+    let range = Uniform::new(low, high);
+    return (0..num_elements).map(|_| rng.sample(&range)).collect()
+}

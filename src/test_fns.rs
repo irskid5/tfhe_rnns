@@ -10,6 +10,7 @@ use concrete_core::prelude::*;
 use hdf5::H5Type;
 use hdf5::{File, Dataset};
 use std::collections::HashMap;
+use std::io::{self, Stdout};
 use ndarray::*;
 use time_graph::*;
 
@@ -33,6 +34,17 @@ macro_rules! print_test_banner {
         println!("Ending {}", stringify!($func_name).to_uppercase());
         println!("--------------------------------------------------\n");
     };
+}
+
+#[derive(Debug, serde::Serialize)]
+struct CsvRecord {
+    parameter_set: String,
+    num_cts: u32,
+    log_p: u8,
+    num_gpus: u8,
+    avg_runtime_ms: f32,
+    correctness: f32,
+    num_measurements: u32
 }
 
 pub fn test_mnist_weights_import_hashmap(filename: &str) -> hdf5::Result<()> {
@@ -121,6 +133,38 @@ pub fn populate_depopulate_lwe_ct_vector(config: &Parameters) -> Result<(), Box<
     Ok(())
 }
 
+pub fn benchmark_amortized_cuda(
+    filename: String,
+) -> Result<(), Box<dyn Error>> {
+    const UNSAFE_SECRET: u128 = 1997;
+    let (
+        mut default_engine, 
+        mut serial_engine, 
+        mut parallel_engine, 
+        mut cuda_engine, 
+        mut amortized_cuda_engine
+    ) = init_engines(UNSAFE_SECRET)?;
+
+    std::fs::create_dir_all("benchmarks/")?;
+    let mut wtr = csv::Writer::from_path(String::from("benchmarks/") + &filename)?;
+
+    let ct_nums = vec![8, 32, 64, 128, 256, 512, 768, 1024, 1536, 2048];
+    let precisions = vec![6, 7, 8, 9, 10, 11];
+    let params: Vec<&Parameters> = vec![&SET2, &SET3, &SET4, &SET5, &SET6, &SET7, &SET8, &SET9];
+    for param in params {
+        let keys: Keys = create_keys(param, &mut default_engine, &mut parallel_engine)?;
+        for p in &precisions {
+            for i in &ct_nums {
+                print_test_banner!(amortized_cuda_bs_test, true, *i as usize, 100, *p, param, Some(keys.clone()), true, Some(&mut wtr));
+            }
+        }
+    }
+
+    // End the csv writer
+    wtr.flush()?;
+
+    Ok(())
+}
 
 pub fn amortized_cuda_bs_test(
     decrypt: bool,
@@ -128,8 +172,10 @@ pub fn amortized_cuda_bs_test(
     num_measurements: usize,
     precision: i32,
     config: &Parameters,
+    keys: Option<Keys>,
+    save_csv: bool,
+    wtr: Option<&mut csv::Writer<std::fs::File>>
 ) -> Result<(), Box<dyn Error>> {
-
     // Create the necessary engines
     // Here we need to create a secret to give to the unix seeder, but we skip the actual secret creation
     const UNSAFE_SECRET: u128 = 1997;
@@ -142,19 +188,25 @@ pub fn amortized_cuda_bs_test(
     ) = init_engines(UNSAFE_SECRET)?;
 
     // Create keys
-    // let h_keys: Keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
-    // save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
-    let h_keys: Keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
+    let h_keys: Keys;
+    if keys.is_none() {
+        h_keys = create_keys(config, &mut default_engine, &mut parallel_engine)?;
+        // save_keys("./keys/keys.bin", "./keys/", &h_keys, &mut serial_engine)?;
+        // h_keys = load_keys("./keys/keys.bin", &mut serial_engine)?;
+    } else {
+        h_keys = keys.unwrap();
+    }
 
     // Establish precision
     let log_q: i32 = 64;
     let log_p: i32 = precision;
+    let half_range = 1 << (log_p - 1);
     let round_off: u64 = 1u64 << (log_q - log_p - 1);
 
     // Encrypt inputs/outputs
+    // let inputs_raw = random_int64_vector(-half_range, half_range-1, num_cts);
     let inputs_raw = vec![0_i64; num_cts];   
     // let num_cts: usize = 1 << log_p;
-    // let half_range = 1 << (log_p - 1);
 
     // let inputs_raw: Vec<i64> = (-half_range..half_range).collect(); // The whole domain
     // let inputs_raw: Vec<i64> = vec![-2, -2, 2, 0, 0, 2, -2, -2, 0, 0];
@@ -172,7 +224,7 @@ pub fn amortized_cuda_bs_test(
     )?;
 
     // Create LUTs
-    let h_luts = identity_lut(log_p, log_q, num_cts, &config, &mut default_engine)?;
+    let h_luts = sign_lut(log_p, log_q, num_cts, &config, &mut default_engine)?;
 
     // Send data to GPU (MULTIPLE CT)
     // send input to the GPU
@@ -183,11 +235,10 @@ pub fn amortized_cuda_bs_test(
     let d_fourier_bsk: CudaFourierLweBootstrapKey64 =
         cuda_engine.convert_lwe_bootstrap_key(&h_keys.bsk)?;
     let mut d_out_cts = cuda_engine.convert_lwe_ciphertext_vector(&h_out_cts)?;
-
     println!("Created data and sent to GPU");
 
-    println!("Launching GPU amortized bootstrap of {} LWE CTs.", num_cts);
 
+    println!("Launching GPU amortized bootstrap of {} LWE CTs.", num_cts);
     let mut measurements: Vec<f32> = vec![];
     for i in 0..num_measurements {
         let now = Instant::now();
@@ -206,7 +257,7 @@ pub fn amortized_cuda_bs_test(
 
     println!("Avg duration of {} bootstraps (precision of {}-bits, {} number of measurements) = {:.4} ms", num_cts, log_p-1, num_measurements, avg_ms);
 
-    if decrypt {
+    if decrypt || save_csv {
         h_out_cts = cuda_engine.convert_lwe_ciphertext_vector(&d_out_cts)?;
 
         let h_result_pts = default_engine.decrypt_lwe_ciphertext_vector(&h_keys.extracted, &h_out_cts)?;
@@ -229,6 +280,20 @@ pub fn amortized_cuda_bs_test(
         let correctness = 100_f32 * rights as f32 / inputs_raw.len() as f32;
 
         println!("Correctness ({}-bit) = {:.4} %.", log_p-1, correctness);
+
+        if save_csv {
+            let writer = wtr.unwrap();
+            writer.serialize(CsvRecord {
+                parameter_set: config.set_id.clone(),
+                num_cts: num_cts as u32,
+                log_p: log_p as u8,
+                num_gpus: cuda_engine.get_number_of_gpus().0 as u8,
+                avg_runtime_ms: avg_ms as f32,
+                correctness: correctness as f32,
+                num_measurements: num_measurements as u32
+            })?;
+            writer.flush()?;
+        }
     }
 
     Ok(())

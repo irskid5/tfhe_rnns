@@ -26,16 +26,11 @@ fn run_tests() -> Result<(), Box<dyn Error>> {
     // Tests
 
     // MULTI GPU, MULTI NUM CT TEST
-    // let ct_nums = vec![8, 32, 128, 256, 512, 768, 1024, 1536, 2048];
-    // let precisions = vec![6];
-    // for p in precisions {
-    //     for i in &ct_nums {
-    //         print_test_banner!(amortized_cuda_bs_test, true, *i as usize, 10, p, &*SET10);
-    //     }
-    // }
+    let filename = String::from("benchmark_amortizedPBS_ gpus_2_nvidia2080Ti_cuda_12_1.csv");
+    print_test_banner!(benchmark_amortized_cuda,filename);
 
     // MULTI GPU, SINGLE NUM CT TEST
-    print_test_banner!(amortized_cuda_bs_test, true, 32000, 1, 6, &*SET8);
+    // print_test_banner!(amortized_cuda_bs_test, true, 32000, 1, 6, &*SET8, None, false, None);
 
     // print_test_banner!(fft_bootstrap_woppbs_test,);
 
